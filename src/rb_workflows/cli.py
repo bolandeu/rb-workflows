@@ -26,8 +26,16 @@ def run(name: str, payload: dict) -> dict:
     return asyncio.run(workflow(**payload))
 
 
+class _Parser(argparse.ArgumentParser):
+    """The Standard's error envelope: an unknown option prints JSON with `ok: false` and exits 2."""
+
+    def error(self, message: str) -> None:
+        print(json.dumps({"ok": False, "error": {"code": "INVALID_ARGUMENTS", "message": message}}, ensure_ascii=False))
+        raise SystemExit(2)
+
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="rb-workflows", description="Run a workflow locally (Windmill-as-code).")
+    parser = _Parser(prog="rb-workflows", description="Run a workflow locally (Windmill-as-code).")
+    parser.add_argument("--json", action="store_true", help="print the result as JSON (the contract)")
     parser.add_argument("--version", action="version", version=version())
     sub = parser.add_subparsers(dest="command")  # no command: the Standard wants the list and exit 0
     contract = sub.add_parser("describe", help="machine-readable contract (OpenCLI): the workflows and their input")
