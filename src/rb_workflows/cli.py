@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
 from typing import NoReturn
 
@@ -42,6 +43,12 @@ def _parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command")  # no command: the Standard wants the list and exit 0
     contract = sub.add_parser("describe", help="machine-readable contract (OpenCLI): the workflows and their input")
     contract.add_argument("--json", action="store_true", help="the contract (always JSON)")
+    doctor = sub.add_parser("doctor", help="readiness of this machine: keys, proxies, the workflow engine")
+    doctor.add_argument("--json", action="store_true", help="the report as JSON (the contract)")
+    auth = sub.add_parser("auth", help="credentials of the services")
+    auth_status = auth.add_subparsers(dest="auth_command")
+    status_parser = auth_status.add_parser("status", help="where every service's key comes from (never the key)")
+    status_parser.add_argument("--json", action="store_true", help="the report as JSON (the contract)")
     go = sub.add_parser("run", help="run one workflow")
     go.add_argument("workflow", choices=sorted(WORKFLOWS))
     go.add_argument("--input", help='JSON object with the workflow input, e.g. {"urls": ["https://example.com"]}')
@@ -96,6 +103,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "describe":
         print(json.dumps(DESCRIBE, ensure_ascii=False))
         return 0
+    if args.command == "doctor":
+        return _doctor()
+    if args.command == "auth":
+        if args.auth_command != "status":
+            print(BARE_AUTH, end="")
+            return 0
+        return _auth_status()
     payload: dict = json.loads(args.input) if args.input else {}
     imports = {"urls": args.urls, "budget_usd": args.budget_usd, "proxy": args.proxy, "steps": args.steps}
     payload |= {key: value for key, value in imports.items() if value is not None}
@@ -115,3 +129,60 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())
+
+
+def _doctor() -> int:
+    """`doctor --json`: what this machine can and cannot do, as the family's envelope."""
+    from .credentials import binding
+
+    checks = []
+    for service in SERVICES:
+        api_key, proxy = binding(service)
+        checks.append(
+            {
+                "name": f"credential:{service}",
+                "ok": True,  # a missing key is not a broken machine: the cascade just skips the step
+                "detail": ("key present" if api_key else "no key") + (", proxy bound" if proxy else ""),
+            }
+        )
+    payload = {"ok": True, "checks": checks}
+    print(json.dumps(payload, ensure_ascii=False))
+    return 0
+
+
+def _auth_status() -> int:
+    """`auth status --json`: the family's envelope — where a key comes from, never the key."""
+    from rb_credentials.status import entry, exit_code, problems, report
+
+    from .credentials import binding, in_windmill
+
+    source = (
+        "windmill" if in_windmill() else ("9router" if os.environ.get("RB_WORKFLOWS_SOURCE") == "9router" else "store")
+    )
+    records = []
+    for service in SERVICES:
+        api_key = binding(service)[0]
+        records.append(
+            entry(
+                service,
+                required=False,  # a service without a key is skipped by the waterfall, not a broken install
+                fields=("api_key",),
+                source=source if api_key else "missing",
+                source_ref=f"{source}:{service}" if api_key else None,
+                status="unchecked" if api_key else "missing",
+                message=None if api_key else f"run `rb-workflows auth login --provider {service}`",
+            )
+        )
+    payload = report("rb-workflows", version(), records)
+    payload["ok"] = not problems(payload)
+    print(json.dumps(payload, ensure_ascii=False))
+    return exit_code(payload)
+
+
+BARE_AUTH = """Usage: rb-workflows auth COMMAND
+
+Commands:
+  status    where every service's key comes from (never the key)
+"""
+
+SERVICES = ("exa", "tavily")
