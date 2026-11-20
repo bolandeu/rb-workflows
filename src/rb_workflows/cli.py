@@ -43,6 +43,13 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+BARE_HELP = """Usage: rb-workflows COMMAND
+
+Commands:
+  run       run one workflow
+  describe  this contract
+"""
+
 DESCRIBE = {
     "ok": True,
     "opencli": "0.1",
@@ -74,7 +81,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
     if args.command is None:
-        parser.print_help()
+        print(BARE_HELP, end="")  # the Standard's shape: a Usage line with COMMAND, then a Commands section
         return 0
     if args.command == "describe":
         print(json.dumps(DESCRIBE, ensure_ascii=False))
