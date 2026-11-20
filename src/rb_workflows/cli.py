@@ -45,7 +45,8 @@ def _parser() -> argparse.ArgumentParser:
     contract.add_argument("--json", action="store_true", help="the contract (always JSON)")
     doctor = sub.add_parser("doctor", help="readiness of this machine: keys, proxies, the workflow engine")
     doctor.add_argument("--json", action="store_true", help="the report as JSON (the contract)")
-    auth = sub.add_parser("auth", help="credentials of the services")
+    auth = sub.add_parser("auth", help="credentials of the services", add_help=False)  # its own help: a group's shape
+    auth.add_argument("--help", "-h", action="store_true", help="list the auth commands")
     auth_status = auth.add_subparsers(dest="auth_command")
     status_parser = auth_status.add_parser("status", help="where every service's key comes from (never the key)")
     status_parser.add_argument("--json", action="store_true", help="the report as JSON (the contract)")
@@ -64,6 +65,8 @@ BARE_HELP = """Usage: rb-workflows COMMAND
 
 Commands:
   run       run one workflow
+  doctor    readiness of this machine: keys, proxies, the workflow engine
+  auth      credentials of the services
   describe  this contract
 """
 
@@ -106,6 +109,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "doctor":
         return _doctor()
     if args.command == "auth":
+        if getattr(args, "help", False):
+            print(BARE_AUTH, end="")
+            return 0
         if args.auth_command != "status":
             print(BARE_AUTH, end="")
             return 0
