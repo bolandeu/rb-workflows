@@ -324,7 +324,7 @@ dev = [
 
 [[package]]
 name = "rb-credentials"
-source = { directory = "../rb-credentials" }
+source = { editable = "../rb-credentials" }
 dependencies = [
     { name = "pydantic" },
 ]
@@ -366,7 +366,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "httpx", extras = ["socks"], specifier = ">=0.27" },
-    { name = "rb-credentials", directory = "../rb-credentials" },
+    { name = "rb-credentials", editable = "../rb-credentials" },
     { name = "wmill", specifier = ">=1.0" },
 ]
 

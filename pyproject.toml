@@ -37,7 +37,7 @@ fallback-version = "0.0.0"
 packages = ["src/rb_workflows"]
 
 [tool.uv.sources]
-rb-credentials = { path = "../rb-credentials" }
+rb-credentials = { path = "../rb-credentials", editable = true }
 rb-9router = { path = "../rb-9router", editable = true }  # private, never published
 
 
