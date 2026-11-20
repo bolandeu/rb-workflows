@@ -37,13 +37,9 @@ fallback-version = "0.0.0"
 packages = ["src/rb_workflows"]
 
 [tool.uv.sources]
-rb-credentials = { index = "gitea" }
+rb-credentials = { path = "../rb-credentials" }
 rb-9router = { path = "../rb-9router", editable = true }  # private, never published
 
-[[tool.uv.index]]
-name = "gitea"
-url = "https://homeserver.tailee01ab.ts.net:3000/api/packages/bolandeu/pypi/simple"
-explicit = true
 
 [tool.ruff]
 line-length = 120
