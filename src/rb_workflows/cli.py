@@ -30,6 +30,8 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="rb-workflows", description="Run a workflow locally (Windmill-as-code).")
     parser.add_argument("--version", action="version", version=version())
     sub = parser.add_subparsers(dest="command", required=True)
+    contract = sub.add_parser("describe", help="machine-readable contract (OpenCLI): the workflows and their input")
+    contract.add_argument("--json", action="store_true", help="the contract (always JSON)")
     go = sub.add_parser("run", help="run one workflow")
     go.add_argument("workflow", choices=sorted(WORKFLOWS))
     go.add_argument("--input", help='JSON object with the workflow input, e.g. {"urls": ["https://example.com"]}')
@@ -41,8 +43,27 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+DESCRIBE = {
+    "ok": True,
+    "opencli": "0.1",
+    "info": {"title": "rb-workflows", "summary": "Workflows as code: run locally, deploy to Windmill unchanged"},
+    "command": {
+        "name": "rb-workflows",
+        "options": [],
+        "commands": [
+            {"name": "run", "description": "run one workflow", "arguments": [{"name": "workflow", "required": True}],
+             "options": [{"name": "--input"}, {"name": "--urls"}, {"name": "--budget-usd"}, {"name": "--proxy"},
+                         {"name": "--steps"}, {"name": "--json"}]},
+            {"name": "describe", "description": "this contract"},
+        ],
+    },
+}
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    if args.command == "describe":
+        print(json.dumps(DESCRIBE, ensure_ascii=False))
+        return 0
     payload: dict = json.loads(args.input) if args.input else {}
     imports = {"urls": args.urls, "budget_usd": args.budget_usd, "proxy": args.proxy, "steps": args.steps}
     payload |= {key: value for key, value in imports.items() if value is not None}
