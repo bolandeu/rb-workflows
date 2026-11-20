@@ -29,7 +29,7 @@ def run(name: str, payload: dict) -> dict:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="rb-workflows", description="Run a workflow locally (Windmill-as-code).")
     parser.add_argument("--version", action="version", version=version())
-    sub = parser.add_subparsers(dest="command", required=True)
+    sub = parser.add_subparsers(dest="command")  # no command: the Standard wants the list and exit 0
     contract = sub.add_parser("describe", help="machine-readable contract (OpenCLI): the workflows and their input")
     contract.add_argument("--json", action="store_true", help="the contract (always JSON)")
     go = sub.add_parser("run", help="run one workflow")
@@ -71,7 +71,11 @@ DESCRIBE = {
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
+    parser = _parser()
+    args = parser.parse_args(argv)
+    if args.command is None:
+        parser.print_help()
+        return 0
     if args.command == "describe":
         print(json.dumps(DESCRIBE, ensure_ascii=False))
         return 0
