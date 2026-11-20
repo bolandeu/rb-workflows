@@ -1,4 +1,4 @@
-# AGENTS.md — rb-workflows
+# AGENTS.md — wf
 
 Воркфлоу как код на базе Windmill Workflow-as-Code: `@workflow` + `@task` из `wmill`. Тот же файл гоняется локально
 (`@task` выполняет тело, `step()` инлайнится, `sleep()` уходит в `asyncio.sleep`) и деплоится в Windmill без правок.
@@ -31,5 +31,5 @@
 uv sync
 uv run pytest -q
 uv run ruff check . && uv run ty check
-rb-workflows run web-fetch --urls https://example.com --json
+wf run web-fetch --urls https://example.com --json
 ```

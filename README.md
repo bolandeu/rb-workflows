@@ -1,4 +1,4 @@
-# rb-workflows
+# wf
 
 Воркфлоу как код на базе [Windmill Workflow-as-Code](https://github.com/windmill-labs/windmill): `@workflow`,
 `@task`, `step()`. Тот же файл гоняется локально и деплоится в Windmill без правок — вне джоба `@task` просто
@@ -10,9 +10,9 @@
 ## Запуск
 
 ```bash
-rb-workflows run web-fetch --urls https://example.com --json
-rb-workflows run web-fetch --input '{"urls": ["https://a", "https://b"], "budget_usd": 0.01}' --json
-rb-workflows run web-fetch --urls https://example.com --steps exa --proxy socks5://u:p@h:1080
+wf run web-fetch --urls https://example.com --json
+wf run web-fetch --input '{"urls": ["https://a", "https://b"], "budget_usd": 0.01}' --json
+wf run web-fetch --urls https://example.com --steps exa --proxy socks5://u:p@h:1080
 ```
 
 `--json` — контракт (его читают скрипты и агенты), без него — короткая сводка. Exit 0 — хоть что-то получено.

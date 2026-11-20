@@ -12,7 +12,7 @@ dependencies = [
 ]
 
 [project.scripts]
-rb-workflows = "rb_workflows.cli:main"
+wf = "rb_workflows.cli:main"
 
 [dependency-groups]
 dev = [

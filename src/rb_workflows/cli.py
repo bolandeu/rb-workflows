@@ -37,7 +37,7 @@ class _Parser(argparse.ArgumentParser):
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = _Parser(prog="rb-workflows", description="Run a workflow locally (Windmill-as-code).")
+    parser = _Parser(prog="wf", description="Run a workflow locally (Windmill-as-code).")
     parser.add_argument("--json", action="store_true", help="print the result as JSON (the contract)")
     parser.add_argument("--version", action="version", version=version())
     sub = parser.add_subparsers(dest="command")  # no command: the Standard wants the list and exit 0
@@ -61,7 +61,7 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-BARE_HELP = """Usage: rb-workflows COMMAND
+BARE_HELP = """Usage: wf COMMAND
 
 Commands:
   run       run one workflow
@@ -85,11 +85,11 @@ DESCRIBE = {
     "ok": True,
     "opencli": "0.1",
     "info": {
-        "title": "rb-workflows",
+        "title": "wf",
         "summary": "Workflows as code: run locally, deploy to Windmill unchanged",
     },
     "command": {
-        "name": "rb-workflows",
+        "name": "wf",
         "options": [
             {
                 "name": "--version",
@@ -221,16 +221,16 @@ def _auth_status() -> int:
                 source=source if api_key else "missing",
                 source_ref=f"{source}:{service}" if api_key else None,
                 status="unchecked" if api_key else "missing",
-                message=None if api_key else f"run `rb-workflows auth login --provider {service}`",
+                message=None if api_key else f"run `wf auth login --provider {service}`",
             )
         )
-    payload = report("rb-workflows", version(), records)
+    payload = report("wf", version(), records)
     payload["ok"] = not problems(payload)
     print(json.dumps(payload, ensure_ascii=False))
     return exit_code(payload)
 
 
-BARE_AUTH = """Usage: rb-workflows auth COMMAND
+BARE_AUTH = """Usage: wf auth COMMAND
 
 Commands:
   status    where every service's key comes from (never the key)
