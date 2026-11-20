@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -127,21 +129,20 @@ def test_the_package_ships_the_flow_it_documents() -> None:
     assert (root / "src/rb_workflows/flows/web_fetch.py").is_file()
 
 
-def test_server_paths_do_not_leak_into_a_local_spider_run(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_spider_step_asks_for_the_content_and_ignores_env_proxies(monkeypatch: pytest.MonkeyPatch) -> None:
     from rb_workflows import adapters
 
-    monkeypatch.setenv("SPIDER_CACHE_DIR", "/data/cache/spider")
-    monkeypatch.setenv("SPIDER_DATABASE_URL", "postgresql://user@host/db")
-    monkeypatch.setenv("OTHER_DATABASE_URL", "postgresql://x")
-    env = adapters.local_env()
-    assert env["SPIDER_CACHE_DIR"] != "/data/cache/spider"
-    assert "SPIDER_DATABASE_URL" not in env and "OTHER_DATABASE_URL" not in env
+    seen: dict = {}
 
+    def run(argv, **kwargs):
+        seen.update(argv=argv, **kwargs)
+        page = {"status": 200, "markdown": "text", "final_url": "https://a.example/x", "seo": {"title": "X"}}
+        return subprocess.CompletedProcess(argv, 0, stdout=json.dumps(page), stderr="")
 
-def test_a_plain_spider_on_path_is_used_as_is(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    from rb_workflows import adapters
+    monkeypatch.setattr(adapters.subprocess, "run", run)
+    found = asyncio.run(adapters.spider("https://a.example/x", proxy="socks5://p:1"))
 
-    plain = tmp_path / "spider"
-    plain.write_text("#!/bin/sh\nexec /usr/bin/true\n")
-    monkeypatch.setattr(adapters.shutil, "which", lambda _name: str(plain))
-    assert adapters.spider_binary() == str(plain)
+    assert (found["source"], found["text"]) == ("spider", "text")
+    assert seen["argv"][:5] == ["spider", "fetch", "https://a.example/x", "--json", "--include"]
+    assert "crawl.proxy_urls=socks5://p:1" in seen["argv"]
+    assert "env" not in seen  # inherited as is: spider itself keeps `trust_env` off and picks a writable cache

@@ -9,11 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
-import shutil
 import subprocess
-import tempfile
-from pathlib import Path
 
 import httpx
 
@@ -40,7 +36,7 @@ async def exa(url: str, *, proxy: str | None = None) -> dict:
         return _empty("exa", url, reason="no_key")
     payload = {"urls": [url], "text": {"maxCharacters": MAX_TEXT}}
     try:
-        async with httpx.AsyncClient(timeout=TIMEOUT, proxy=proxy) as client:
+        async with httpx.AsyncClient(timeout=TIMEOUT, proxy=proxy, trust_env=False) as client:
             response = await client.post(
                 "https://api.exa.ai/contents", json=payload, headers={"x-api-key": api_key, "User-Agent": UA}
             )
@@ -73,7 +69,7 @@ async def tavily(url: str, *, proxy: str | None = None) -> dict:
     if not api_key:
         return _empty("tavily", url, reason="no_key")
     try:
-        async with httpx.AsyncClient(timeout=TIMEOUT, proxy=proxy) as client:
+        async with httpx.AsyncClient(timeout=TIMEOUT, proxy=proxy, trust_env=False) as client:
             response = await client.post(
                 "https://api.tavily.com/extract",
                 json={"urls": [url]},
@@ -101,45 +97,15 @@ async def tavily(url: str, *, proxy: str | None = None) -> dict:
     )
 
 
-def local_env() -> dict[str, str]:
-    """The shim's environment with server paths removed: a local run must not write to `/data`.
-
-    `doppler run -p tools -c prd` (the `rb-bin` shim) exports the production container's settings — `SPIDER_CACHE_DIR=/data/…`
-    and `SPIDER_DATABASE_URL=postgresql://…`. On a laptop `/data` is read-only and the production database is not ours
-    to touch, so `spider` gets a cache under the system temp dir instead; the workflow keeps its own storage.
-    """
-    env = dict(os.environ)
-    for name in [key for key in env if key.endswith("_DATABASE_URL")]:
-        env.pop(name, None)
-    cache = env.get("SPIDER_CACHE_DIR", "")
-    if cache.startswith("/data"):
-        env["SPIDER_CACHE_DIR"] = str(tempfile.gettempdir() + "/rb-workflows/spider")
-    return env
-
-
-def spider_binary() -> str:
-    """The `spider` to run: the shim in `~/.local/rb-bin` injects the production container's environment, so a local
-    run goes straight to the CLI it wraps. Any other `spider` on PATH is used as is."""
-    found = shutil.which("spider") or "spider"
-    try:
-        head = Path(found).read_text(encoding="utf-8", errors="ignore")[:400]
-    except OSError:
-        return found
-    if "doppler run" not in head:
-        return found
-    real = Path.home() / ".local" / "bin" / "spider"
-    return str(real) if real.exists() else found
-
-
 async def spider(url: str, *, proxy: str | None = None, render: bool = False) -> dict:
     """`spider fetch --json`: our own stack (fingerprint, proxies, browser) — the step that survives blocks."""
-    argv = [spider_binary(), "fetch", url, "--json", "--include", "markdown,text"]
+    argv = ["spider", "fetch", url, "--json", "--include", "markdown,text"]
     if render:
         argv.append("--render")
     if proxy:
         argv += ["--set", f"crawl.proxy_urls={proxy}"]
     try:
-        proc = subprocess.run(argv, capture_output=True, text=True, timeout=TIMEOUT * 3, check=False, env=local_env())  # noqa: S603
+        proc = subprocess.run(argv, capture_output=True, text=True, timeout=TIMEOUT * 3, check=False)  # noqa: S603
     except FileNotFoundError:
         return _empty("spider", url, reason="not_installed")
     except subprocess.TimeoutExpired:
@@ -169,7 +135,7 @@ async def spider(url: str, *, proxy: str | None = None, render: bool = False) ->
 async def direct(url: str, *, proxy: str | None = None) -> dict:
     """Plain HTTP GET: the last resort, no key, no cost — and no way around a JS-only page."""
     try:
-        async with httpx.AsyncClient(timeout=TIMEOUT, proxy=proxy, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=TIMEOUT, proxy=proxy, follow_redirects=True, trust_env=False) as client:
             response = await client.get(url, headers={"User-Agent": UA})
     except httpx.HTTPError as exc:
         return _empty("direct", url, reason=f"error:{type(exc).__name__}")
