@@ -51,13 +51,24 @@ DESCRIBE = {
         "name": "rb-workflows",
         "options": [],
         "commands": [
-            {"name": "run", "description": "run one workflow", "arguments": [{"name": "workflow", "required": True}],
-             "options": [{"name": "--input"}, {"name": "--urls"}, {"name": "--budget-usd"}, {"name": "--proxy"},
-                         {"name": "--steps"}, {"name": "--json"}]},
+            {
+                "name": "run",
+                "description": "run one workflow",
+                "arguments": [{"name": "workflow", "required": True}],
+                "options": [
+                    {"name": "--input"},
+                    {"name": "--urls"},
+                    {"name": "--budget-usd"},
+                    {"name": "--proxy"},
+                    {"name": "--steps"},
+                    {"name": "--json"},
+                ],
+            },
             {"name": "describe", "description": "this contract"},
         ],
     },
 }
+
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
