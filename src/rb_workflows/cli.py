@@ -11,6 +11,7 @@ import json
 import sys
 
 from .flows.web_fetch import web_fetch
+from .version import version
 
 __all__ = ["main", "run"]
 
@@ -27,6 +28,7 @@ def run(name: str, payload: dict) -> dict:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="rb-workflows", description="Run a workflow locally (Windmill-as-code).")
+    parser.add_argument("--version", action="version", version=version())
     sub = parser.add_subparsers(dest="command", required=True)
     go = sub.add_parser("run", help="run one workflow")
     go.add_argument("workflow", choices=sorted(WORKFLOWS))

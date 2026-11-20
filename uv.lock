@@ -320,6 +320,7 @@ source = { editable = "../rb-9router" }
 dev = [
     { name = "pytest", specifier = ">=8.0" },
     { name = "ruff", specifier = ">=0.6" },
+    { name = "ty", specifier = ">=0.0.80" },
 ]
 
 [[package]]
