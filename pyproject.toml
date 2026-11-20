@@ -36,10 +36,10 @@ fallback-version = "0.0.0"
 [tool.hatch.build.targets.wheel]
 packages = ["src/rb_workflows"]
 
+# Siblings resolve from disk: a version range in `dependencies` plus a `path` source, never an index.
 [tool.uv.sources]
 rb-credentials = { path = "../rb-credentials", editable = true }
 rb-9router = { path = "../rb-9router", editable = true }  # private, never published
-
 
 [tool.ruff]
 line-length = 120
