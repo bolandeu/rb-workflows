@@ -9,6 +9,7 @@ import argparse
 import asyncio
 import json
 import sys
+from typing import NoReturn
 
 from .flows.web_fetch import web_fetch
 from .version import version
@@ -29,7 +30,7 @@ def run(name: str, payload: dict) -> dict:
 class _Parser(argparse.ArgumentParser):
     """The Standard's error envelope: an unknown option prints JSON with `ok: false` and exits 2."""
 
-    def error(self, message: str) -> None:
+    def error(self, message: str) -> NoReturn:
         print(json.dumps({"ok": False, "error": {"code": "INVALID_ARGUMENTS", "message": message}}, ensure_ascii=False))
         raise SystemExit(2)
 
