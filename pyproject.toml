@@ -1,0 +1,61 @@
+[project]
+name = "rb-workflows"
+dynamic = ["version"]
+description = "Workflows as code (Windmill Workflow-as-Code) that run locally: fetch documents through a cascade of services"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Roman Bolandau" }]
+dependencies = [
+    "wmill>=1.0",
+    "httpx[socks]>=0.27",  # 9router proxies are socks5 (httpx takes socksio)
+    "rb-credentials>=0.7.1,<1",
+]
+
+[project.scripts]
+rb-workflows = "rb_workflows.cli:main"
+
+[dependency-groups]
+dev = [
+    "rb-9router",  # local only: keys and proxies from 9router's database (RB_WORKFLOWS_SOURCE=9router)
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.6",
+    "ty>=0.0.80",
+]
+
+[build-system]
+requires = ["hatchling", "uv-dynamic-versioning"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "uv-dynamic-versioning"
+
+[tool.uv-dynamic-versioning]
+fallback-version = "0.0.0"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rb_workflows"]
+
+[tool.uv.sources]
+rb-credentials = { index = "gitea" }
+rb-9router = { path = "../rb-9router", editable = true }  # private, never published
+
+[[tool.uv.index]]
+name = "gitea"
+url = "https://homeserver.tailee01ab.ts.net:3000/api/packages/bolandeu/pypi/simple"
+explicit = true
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "UP", "B", "SIM", "RUF", "S", "T20"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101", "S105", "S106"]
+"src/rb_workflows/cli.py" = ["T20"]  # a CLI prints: that is its job
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
