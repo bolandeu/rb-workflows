@@ -33,6 +33,7 @@ class _Parser(argparse.ArgumentParser):
         print(json.dumps({"ok": False, "error": {"code": "INVALID_ARGUMENTS", "message": message}}, ensure_ascii=False))
         raise SystemExit(2)
 
+
 def _parser() -> argparse.ArgumentParser:
     parser = _Parser(prog="rb-workflows", description="Run a workflow locally (Windmill-as-code).")
     parser.add_argument("--json", action="store_true", help="print the result as JSON (the contract)")
