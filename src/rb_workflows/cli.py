@@ -70,28 +70,73 @@ Commands:
   describe  this contract
 """
 
+
+def _param(name: str, kind: str, default: object = None, *, multiple: bool = False) -> dict:
+    """One `describe` entry: the name, its type, its default and — only when true — its repeatability."""
+    metadata = [{"name": "x-rb-type", "value": kind}, {"name": "x-rb-default", "value": default}]
+    if multiple:
+        metadata.append({"name": "x-rb-multiple", "value": True})
+    return {"name": name, "metadata": metadata}
+
+
+_JSON_OPTION = _param("--json", "boolean", False)
+
 DESCRIBE = {
     "ok": True,
     "opencli": "0.1",
-    "info": {"title": "rb-workflows", "summary": "Workflows as code: run locally, deploy to Windmill unchanged"},
+    "info": {
+        "title": "rb-workflows",
+        "summary": "Workflows as code: run locally, deploy to Windmill unchanged",
+    },
     "command": {
         "name": "rb-workflows",
-        "options": [],
+        "options": [
+            {
+                "name": "--version",
+                "metadata": [{"name": "x-rb-type", "value": "boolean"}, {"name": "x-rb-default", "value": False}],
+            },
+            _JSON_OPTION,
+        ],
         "commands": [
             {
                 "name": "run",
                 "description": "run one workflow",
-                "arguments": [{"name": "workflow", "required": True}],
+                "arguments": [_param("workflow", "choice")],
                 "options": [
-                    {"name": "--input"},
-                    {"name": "--urls"},
-                    {"name": "--budget-usd"},
-                    {"name": "--proxy"},
-                    {"name": "--steps"},
-                    {"name": "--json"},
+                    _param("--input", "str"),
+                    _param("--urls", "str", multiple=True),
+                    _param("--budget-usd", "float"),
+                    _param("--proxy", "str"),
+                    _param("--steps", "str", multiple=True),
+                    _JSON_OPTION,
                 ],
             },
-            {"name": "describe", "description": "this contract"},
+            {
+                "name": "doctor",
+                "description": "readiness of this machine: keys, proxies, the workflow engine",
+                "options": [_JSON_OPTION],
+            },
+            {
+                "name": "auth",
+                "description": "credentials of the services",
+                "options": [
+                    {
+                        "name": "--help",
+                        "metadata": [
+                            {"name": "x-rb-type", "value": "boolean"},
+                            {"name": "x-rb-default", "value": False},
+                        ],
+                    }
+                ],
+                "commands": [
+                    {
+                        "name": "status",
+                        "description": "where every service's key comes from",
+                        "options": [_JSON_OPTION],
+                    },
+                ],
+            },
+            {"name": "describe", "description": "this contract", "options": [_JSON_OPTION]},
         ],
     },
 }
