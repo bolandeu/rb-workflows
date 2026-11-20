@@ -1,0 +1,35 @@
+# AGENTS.md — rb-workflows
+
+Воркфлоу как код на базе Windmill Workflow-as-Code: `@workflow` + `@task` из `wmill`. Тот же файл гоняется локально
+(`@task` выполняет тело, `step()` инлайнится, `sleep()` уходит в `asyncio.sleep`) и деплоится в Windmill без правок.
+
+## Границы
+
+- Шаг (`adapters/`) умеет **только** достать данные: URL → JSON-документ. Ключи и прокси берёт `credentials.binding()`,
+  не сценарий.
+- Сценарий (`flows/`) не знает про сети и ключи: порядок шагов, условия перехода, бюджет.
+- Ничего, кроме JSON, через границу шага: результат `@task` чекпоинтится в Windmill, `datetime` вернётся строкой.
+- Секреты не попадают в `step()` — он чекпоинтится. Только внутрь `@task`.
+
+## Провайдеры: порядок и правила
+
+- Первым всегда `spider` (свой стек, бесплатно), затем `exa`; `tavily` и `direct` реализованы, но в водопад по
+  умолчанию не входят.
+- `ok: false` с `reason` (`blocked`, `empty_text`, `no_key`, `timeout`) — сигнал идти дальше. Исключение в шаге —
+  неожиданность: оно не валит воркфлоу, но попадает в `tried[]`.
+- `trust_env=False` у всех HTTP-клиентов: `HTTP(S)_PROXY` не включает прокси сам, только `--proxy` или привязка ключа.
+
+## Ключи
+
+`credentials.binding(service)` выбирает бэкенд по месту запуска: Windmill-ресурс (`WM_TOKEN`) → 9router
+(`RB_WORKFLOWS_SOURCE=9router`, `RB_WORKFLOWS_KEY=<имя>`) → локальный `rb_credentials.Store("workflows")`
+(`WORKFLOWS_<SERVICE>_API_KEY`, `WORKFLOWS_<SERVICE>_PROXY`). `rb-9router` — dev/path, никогда в `dependencies`.
+
+## Проверки
+
+```sh
+uv sync
+uv run pytest -q
+uv run ruff check . && uv run ty check
+rb-workflows run web-fetch --urls https://example.com --json
+```
