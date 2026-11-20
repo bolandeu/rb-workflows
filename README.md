@@ -4,26 +4,28 @@
 `@task`, `step()`. Тот же файл гоняется локально и деплоится в Windmill без правок — вне джоба `@task` просто
 выполняет тело, `step()` выполняется инлайн, `sleep()` падает в `asyncio.sleep`.
 
-Первый воркфлоу — **`web-fetch`**: один URL или список, через каскад сервисов с потолком расходов.
+Первый воркфлоу — **`web-fetch`**: один URL или список. Первым идёт свой `spider fetch` (бесплатно, со своим
+фингерпринтом и прокси), и только если он не вернул текст — водопад по платным сервисам (пока exa).
 
 ## Запуск
 
 ```bash
 rb-workflows run web-fetch --urls https://example.com --json
 rb-workflows run web-fetch --input '{"urls": ["https://a", "https://b"], "budget_usd": 0.01}' --json
-rb-workflows run web-fetch --urls https://example.com --steps exa direct --proxy socks5://u:p@h:1080
+rb-workflows run web-fetch --urls https://example.com --steps exa --proxy socks5://u:p@h:1080
 ```
 
 `--json` — контракт (его читают скрипты и агенты), без него — короткая сводка. Exit 0 — хоть что-то получено.
 
-## Каскад
+## Водопад
 
 | шаг | что делает | цена |
 | --- | --- | --- |
-| `exa` | `POST /contents`: лучший текст для LLM | `costDollars.total`, ~$0.001/страница |
-| `tavily` | `POST /extract`: `raw_content` | кредиты тарифа |
-| `spider` | `spider fetch --json`: свой стек — фингерпринт, прокси, браузер | 0 |
-| `direct` | `GET` через httpx: последняя попытка | 0 |
+| `spider` | `spider fetch --json`: свой стек — фингерпринт, прокси, браузер. Первый, всегда | 0 |
+| `exa` | `POST /contents`: лучший текст для LLM. Только если spider не дал текста | `costDollars.total`, ~$0.001/страница |
+
+`tavily` (`/extract`) и `direct` (httpx `GET`) реализованы и покрыты тестами, но в водопад по умолчанию не входят:
+включаются строкой в `ADAPTERS` или через `--steps`.
 
 Шаг возвращает `ok: false` с причиной (`blocked`, `empty_text`, `http:404`, `no_key`, `timeout`) — это и есть
 сигнал идти дальше. Исключение — только для неожиданного, его ретраит Windmill.

@@ -1,4 +1,7 @@
-"""`web_fetch`: one URL or a list, through a cascade of services, under a spend ceiling.
+"""`web_fetch`: one URL or a list, through a waterfall of services, under a spend ceiling.
+
+The first step is our own `spider fetch` — it costs nothing and carries the fingerprint and the proxies — and only when
+it returns no text does the waterfall go on to the paid services (for now: exa).
 
 Deterministic by construction: the order of steps and the branch on every result are fixed for the same input, so a
 Windmill replay reaches the same calls. No clock, no randomness, no environment reads — the only variable is what a
@@ -11,19 +14,18 @@ from collections.abc import Awaitable, Callable
 
 from wmill import workflow
 
-from ..adapters import direct, exa, spider, tavily
+from ..adapters import exa, spider
 from ..document import document
 
 __all__ = ["ADAPTERS", "web_fetch"]
 
 Step = Callable[..., Awaitable[dict]]
 
-# Order matters: cheapest and best-quality text first, our own stack when a service refuses the page, plain HTTP last.
+# Order matters: our own stack first (free, fingerprint and proxies), the paid services only when it returns nothing.
+# `tavily` and `direct` are implemented and tested, but not in the default waterfall: add them here when needed.
 ADAPTERS: tuple[tuple[str, Step], ...] = (
-    ("exa", exa),
-    ("tavily", tavily),
     ("spider", spider),
-    ("direct", direct),
+    ("exa", exa),
 )
 
 # A failure worth another service. `blocked` and `empty_text` are the page's answer; `no_key` is ours (a service that
