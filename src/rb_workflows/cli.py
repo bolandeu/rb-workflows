@@ -339,9 +339,7 @@ def _tasks(args: argparse.Namespace) -> int:
             )
     except (FileNotFoundError, ValueError) as exc:  # an id nobody knows: the caller's mistake, said plainly
         print(
-            json.dumps(
-                {"ok": False, "error": {"code": "INVALID_ARGUMENTS", "message": str(exc)}}, ensure_ascii=False
-            )
+            json.dumps({"ok": False, "error": {"code": "INVALID_ARGUMENTS", "message": str(exc)}}, ensure_ascii=False)
         )
         raise SystemExit(2) from None
     if args.json:

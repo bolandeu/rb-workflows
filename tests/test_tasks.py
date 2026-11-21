@@ -175,6 +175,7 @@ def test_gc_removes_finished_tasks_older_than_the_limit_and_keeps_the_rest(tmp_p
     assert answer["kept"] == 2  # a fresh one and a running one, whatever its age
     assert tasks.read("t-new", tmp_path)["state"] == "done"
 
+
 def test_the_cli_says_an_unknown_id_in_the_envelope(tmp_path, capsys) -> None:
     from rb_workflows import cli
 
