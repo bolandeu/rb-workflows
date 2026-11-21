@@ -310,9 +310,12 @@ def test_a_malformed_se_is_refused_in_the_envelope(capsys) -> None:
 
 
 def test_describe_names_every_command_once_and_says_what_is_required() -> None:
+    from typing import cast
+
     from rb_workflows import cli
 
-    commands = cli.DESCRIBE["command"]["commands"]
+    describe = cast("dict[str, Any]", cli.DESCRIBE)
+    commands = describe["command"]["commands"]
     names = [command["name"] for command in commands]
     assert names == sorted(set(names), key=names.index)  # no duplicate, no leftover of a removed command
     descriptions = {command["name"]: command.get("description", "") for command in commands}
