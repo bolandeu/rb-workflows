@@ -57,6 +57,7 @@ REPORTS: dict[str, Callable[[dict], dict]] = {}
 
 # --- ids and their files ----------------------------------------------------------------------------------------
 
+
 def state_dir(base: Path | None = None) -> Path:
     """Where the local task files live: the argument, `RB_WORKFLOWS_STATE_DIR`, or the user state dir of this CLI."""
     if base is not None:
@@ -65,9 +66,11 @@ def state_dir(base: Path | None = None) -> Path:
         return Path(custom).expanduser()
     return platformdirs.user_state_path(APP, appauthor=False) / "tasks"
 
+
 def new_id(kind: str, store: str = "local") -> str:
     """`<store>:<kind>:<sortable time>-<random>` — self-describing, so a reader never guesses."""
     return f"{store}:{kind}:{time.strftime('%Y%m%d-%H%M%S')}-{secrets.token_hex(4)}"
+
 
 def split_id(task_id: str) -> tuple[str, str, str]:
     """`local:top:2026…` → `("local", "top", "2026…")`; an id of an older file has no kind and is read as it is."""
@@ -78,9 +81,11 @@ def split_id(task_id: str) -> tuple[str, str, str]:
         return parts[0], "", parts[1]
     return "local", "", task_id
 
+
 def _path(task_id: str, base: Path | None = None) -> Path:
     store, kind, name = split_id(task_id)
     return state_dir(base) / f"{store}-{kind + '-' if kind else ''}{name}.json"
+
 
 def write(task: Mapping, base: Path | None = None) -> dict:
     """Replace the task's file (mode 0600: the report is the caller's, and the file may hold a request)."""
@@ -93,6 +98,7 @@ def write(task: Mapping, base: Path | None = None) -> dict:
     temp.replace(path)
     return dict(task)
 
+
 def read(task_id: str, base: Path | None = None) -> dict:
     """The stored task; `FileNotFoundError` when the id is unknown (the caller's mistake, not a task's failure)."""
     path = _path(task_id, base)
@@ -103,13 +109,16 @@ def read(task_id: str, base: Path | None = None) -> dict:
     except ValueError as exc:  # a half-written file of a killed worker: name the task, not a JSON traceback
         raise ValueError(f"task '{task_id}' is not readable: {exc}") from exc
 
+
 def update(task_id: str, base: Path | None = None, **fields: object) -> dict:
     """Merge `fields` into the task file and write it back."""
     task = read(task_id, base)
     task.update(fields)
     return write(task, base)
 
+
 # --- the worker ------------------------------------------------------------------------------------------------
+
 
 def spawn(task_id: str, base: Path | None = None) -> int:
     """Run the worker for a local task in its own session, so it outlives the submitting call; returns its pid."""
@@ -124,10 +133,12 @@ def spawn(task_id: str, base: Path | None = None) -> int:
     )
     return process.pid
 
+
 def _job(target: str):
     """`"module:function"` → the function, imported late so a missing optional dep breaks one job, not the module."""
     module_name, _, attribute = target.partition(":")
     return getattr(importlib.import_module(module_name), attribute)
+
 
 def run_task(task_id: str, base: Path | None = None) -> None:
     """The worker body: run the job the task names and store the report — or the error, which the caller can read."""
@@ -138,7 +149,9 @@ def run_task(task_id: str, base: Path | None = None) -> None:
     except Exception as exc:  # a worker must leave a readable state, not a traceback in a log
         update(task_id, base, state="error", error=f"{type(exc).__name__}: {exc}"[:400])
 
+
 # --- stores ----------------------------------------------------------------------------------------------------
+
 
 @runtime_checkable
 class Store(Protocol):
@@ -148,6 +161,7 @@ class Store(Protocol):
     def get(self, task_id: str) -> dict: ...
     def save(self, task: Mapping) -> dict: ...
     def cancel(self, task_id: str) -> dict: ...
+
 
 class FileStore:
     """One JSON file per task: the CLI's store. A created task is `running` and its worker is this same CLI."""
@@ -167,6 +181,7 @@ class FileStore:
 
     def cancel(self, task_id: str) -> dict:
         return update(task_id, self.base, state="cancelled", cancelled_at=time.strftime("%Y-%m-%dT%H:%M:%SZ"))
+
 
 class ArsenkinStore:
     """The service is the state: `create` places their task, `get` asks check/get, `cancel` deletes it."""
@@ -191,6 +206,7 @@ class ArsenkinStore:
         from .services import arsenkin
 
         data = request.get("request") or request
+
         async def place() -> int:
             async with self._client() as client:
                 return await arsenkin.set_task(client, self._secret(), dict(data))
@@ -239,6 +255,7 @@ class ArsenkinStore:
             return {"task_id": task_id, "state": "cancelled", "warning": f"{type(exc).__name__}: {exc}"[:200]}
         return {"task_id": task_id, "state": "cancelled"}
 
+
 class CompositeStore:
     """Routes an id to the store that owns it: `arsenkin:…` to the service, anything else to the files."""
 
@@ -263,11 +280,14 @@ class CompositeStore:
     def cancel(self, task_id: str) -> dict:
         return self._of(task_id).cancel(task_id)
 
+
 def default_store(base: Path | None = None) -> Store:
     """The store this process uses: files here, Arsenkin for their own ids."""
     return CompositeStore(FileStore(base), ArsenkinStore())
 
+
 # --- the calls every front end makes ---------------------------------------------------------------------------
+
 
 async def submit(kind: str, request: Mapping, *, store: Store | None = None) -> dict:
     """Place a job and answer at once with its id, the state and the call that reads it later."""
@@ -287,6 +307,7 @@ async def submit(kind: str, request: Mapping, *, store: Store | None = None) -> 
         "poll": f"wf task {task_id} --json",
     }
 
+
 def get(task_id: str, *, store: Store | None = None) -> dict:
     """The state of a job — or its report once it is done; a failed or cancelled job is `ok: false` with the reason."""
     store = store or default_store()
@@ -305,6 +326,7 @@ def get(task_id: str, *, store: Store | None = None) -> dict:
         "retry_after_s": 15,
     }
 
+
 def wait(task_id: str, *, store: Store | None = None, poll_interval: float = 5.0) -> dict:
     """Poll until the job is done, failed or cancelled."""
     while True:
@@ -312,6 +334,7 @@ def wait(task_id: str, *, store: Store | None = None, poll_interval: float = 5.0
         if answer.get("state") in {"done", "error", "cancelled"}:
             return answer
         time.sleep(poll_interval)
+
 
 def cancel(task_id: str, *, store: Store | None = None) -> dict:
     """Stop the job: their task is deleted, a local one is marked (its worker is not interrupted — the answer says so)."""
