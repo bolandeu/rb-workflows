@@ -32,8 +32,24 @@ RATE_LIMIT_TRIES = 6
 
 
 async def _post(client: httpx.AsyncClient, token: str, path: str, body: dict) -> dict:
+    """One call of the task API (`set`, `check`, `get`, `info`), with every refusal reduced to one sentence.
+
+    Retries: HTTP 429 means the account spent its 30 requests a minute; the call waits `RATE_LIMIT_PAUSE` and tries
+    again, up to `RATE_LIMIT_TRIES` times, and only then raises. A 429 that clears is not an error for the caller.
+
+    Raises `ArsenkinError` (never a bare httpx or json exception, because the caller shows `str(exc)` to a person):
+    - transport failure — `"ConnectError while calling /set: …"`;
+    - HTTP 4xx/5xx — `"HTTP 500 for /set: <first 300 chars of the body>"`;
+    - a JSON body with `code` ending in `ERROR` — `"/set: AUTH_ERROR token is revoked"`;
+    - a body that is not JSON at all (captcha page, proxy error page) — `"/set answered not JSON: <200 chars>"`.
+
+    Returns the parsed JSON body of a successful call.
+    """
     for attempt in range(RATE_LIMIT_TRIES):
-        response = await client.post(f"{BASE}/{path}", json=body, headers={"Authorization": f"Bearer {token}"})
+        try:
+            response = await client.post(f"{BASE}/{path}", json=body, headers={"Authorization": f"Bearer {token}"})
+        except httpx.HTTPError as exc:  # the transport is the service's failure too, not the caller's
+            raise ArsenkinError(f"{type(exc).__name__} while calling /{path}: {exc}") from exc
         if response.status_code != 429:
             break
         if attempt == RATE_LIMIT_TRIES - 1:
@@ -41,7 +57,10 @@ async def _post(client: httpx.AsyncClient, token: str, path: str, body: dict) ->
         await asyncio.sleep(RATE_LIMIT_PAUSE)
     if response.status_code >= 400:
         raise ArsenkinError(f"HTTP {response.status_code} for /{path}: {response.text[:300]}")
-    payload = response.json()
+    try:
+        payload = response.json()
+    except ValueError as exc:  # a captcha page or a proxy error page: say so, do not leak a JSONDecodeError
+        raise ArsenkinError(f"/{path} answered not JSON: {response.text[:200]}") from exc
     if isinstance(payload.get("code"), str) and payload["code"].endswith("ERROR"):
         raise ArsenkinError(f"/{path}: {payload.get('code')} {payload.get('msg') or payload.get('error')}")
     return payload
@@ -57,7 +76,25 @@ async def collect(
     poll_interval: float = 15.0,
     timeout: float = 1800.0,
 ) -> dict:
-    """One URL through `semantics`: the task id, its cost, and the phrases with their positions."""
+    """One URL through `semantics`: the task id, its cost, and the phrases with their positions.
+
+    The API is a small state machine: `set` creates a task (it costs limits and returns `task_id`), `check` is polled
+    every `poll_interval` seconds until the status leaves the pending set, `get` returns the phrases. The whole wait is
+    bounded by `timeout`; the status is polled, not the result, so a finished task is fetched exactly once.
+
+    Parameters:
+        region: `msk` (Yandex Moscow) or `gru` (Google Moscow); anything else is passed through as the service's name.
+        stopwords: minus-words; the service caps them at 10 000.
+        poll_interval: seconds between status checks; the wrapper's 30-a-minute limit covers the sum of the polls.
+        timeout: seconds a single task may take before `ArsenkinError`, so a stuck task cannot hold a batch forever.
+
+    Returns a document in the report shape: `url`, `service`, `region`, `task_id`, `cost` (in limits), `queries`
+    (each `phrase`, `position`, `ws`, `ws_absent`, `toponym`, `question`, `extra`) and `toponims`.
+
+    Raises `ArsenkinError` for everything the service refuses — see `_post` for the wording of each case — including
+    a missing `task_id`, a task that ended in a non-success status (the status name and the service's message go into
+    the text) and a task that never left the pending state (`"still 'process' after N s"`).
+    """
     body = {"mode": "url", "queries": [url], "region": REGIONS.get(region, region), "stopwords": list(stopwords)}
     started = await _post(client, token, "set", {"tools_name": "semantics", "data": body})
     task_id = started.get("task_id")
@@ -87,9 +124,17 @@ async def collect(
         "region": REGIONS.get(region, region),
         "task_id": task_id,
         "cost": cost,
-        "queries": [_query(item, toponims) for item in (result.get("result") or {}).values()],
+        "queries": [_query(item, toponims) for item in _items(result)],
         "toponims": sorted(toponims),
     }
+
+
+def _items(result: dict) -> list[dict]:
+    """The phrases of a result, whatever container the service chose this time (mapping by id, or a plain list)."""
+    items = result.get("result") or []
+    if isinstance(items, dict):
+        return [item for item in items.values() if isinstance(item, dict)]
+    return [item for item in items if isinstance(item, dict)]
 
 
 def _query(item: dict, toponims: frozenset[str]) -> dict:

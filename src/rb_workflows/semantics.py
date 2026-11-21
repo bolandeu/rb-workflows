@@ -27,7 +27,12 @@ PER_MINUTE = 30  # requests of any kind, per the account's own limit
 
 
 class RateLimiter:
-    """At most `limit` calls per `window` seconds, shared by every request of the run."""
+    """At most `limit` calls per `window` seconds, shared by every request of the run.
+
+    Sliding window, not fixed buckets: a burst of `limit` calls is allowed at once, and the next one waits until the
+    oldest stamp leaves the window. Waiting is the point — the account answers 429 otherwise — so `waited` accumulates
+    the seconds a run spent in this limiter and shows up in the report as `requests_waited_s`.
+    """
 
     def __init__(self, limit: int = PER_MINUTE, window: float = 60.0) -> None:
         self.limit, self.window = limit, window
@@ -86,7 +91,28 @@ async def collect(
     poll_interval: float = 15.0,
     token: str | None = None,
 ) -> dict:
-    """Every URL through one service, up to `concurrency` at a time; the report and its summary."""
+    """Every URL through one service, up to `concurrency` at a time; the report and its summary.
+
+    The batch never waits for the first URL: `concurrency` tasks are in flight (5 is the account's own limit), each one
+    a full set → check → get pipeline, so a slow task only occupies its own slot. Every request of every task passes the
+    shared rate limiter, because the service counts the requests of a user, not of a connection.
+
+    Parameters:
+        name: the service to ask (`arsenkin`); resolved through `services.SERVICES`, so a new service needs no change here.
+        region: the search engine/region, `msk` or `gru`, passed to the service unchanged.
+        stopwords: minus-words, forwarded as is.
+        token: an explicit token; without it the token comes from the package store, then from `token get <name>`.
+        timeout: how long a single task may take; it is the service's per-task bound, not the batch's.
+
+    Returns `{"ok", "service", "region", "requests_waited_s", "elapsed_s", "urls", "summary"}`:
+        - `urls` holds one document per URL in the order given; a failure is `{"url", "ok": false, "error"}` where
+          `error` is `"<ExceptionType>: <message>"` — a failed URL never raises out of the batch;
+        - `ok` is true only when every URL succeeded;
+        - `summary` is the per-phrase cross-URL roll-up (see `summary`).
+
+    Raises before any request for a mistake of the caller: `KeyError` for an unknown service, `RuntimeError` for a
+    missing token — both name what to fix.
+    """
     module = service(name)
     token = token or binding(name)[0]
     if not token:
@@ -117,7 +143,15 @@ async def collect(
 
 
 def summary(documents: list[dict]) -> list[dict]:
-    """One row per phrase: how many URLs it came from, and where it stands in each of them."""
+    """One row per phrase: how many URLs it came from, and where it stands in each of them.
+
+    A failed document contributes nothing, so the summary never mixes a service error with a phrase list. A phrase
+    without a position is still a phrase of that URL: it appears with `position: null`, and `urls_count` includes it —
+    that is how "the phrase exists, but the site does not rank for it" stays visible.
+
+    Each row: `phrase`, `urls` (URL → position or None), `urls_count`, `ws` (the largest Wordstat frequency seen) and
+    the `toponym`/`question` flags OR-ed over the URLs. Rows are ordered by how many URLs carry the phrase, then by `ws`.
+    """
     seen: dict[str, dict] = defaultdict(
         lambda: {"phrase": "", "urls": {}, "urls_count": 0, "ws": None, "toponym": False, "question": False}
     )
