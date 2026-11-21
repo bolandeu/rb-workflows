@@ -45,17 +45,17 @@ def test_an_unknown_kind_is_refused_before_a_file_is_written(tmp_path) -> None:
 
 def test_poll_reports_running_then_the_report(tmp_path) -> None:
     tasks.write({"task_id": "t1", "kind": "semantics", "state": "running", "request": {}}, tmp_path)
-    running = tasks.poll_local("t1", tmp_path)
+    running = tasks.get("t1", store=tasks.FileStore(tmp_path))
     assert (running["ok"], running["state"], running["retry_after_s"]) == (True, "running", 15)
 
     tasks.update("t1", tmp_path, state="done", report={"ok": True, "urls": []})
-    done = tasks.poll_local("t1", tmp_path)
+    done = tasks.get("t1", store=tasks.FileStore(tmp_path))
     assert (done["state"], done["urls"]) == ("done", [])
 
 
 def test_a_failed_job_is_a_value_with_its_error(tmp_path) -> None:
     tasks.write({"task_id": "t2", "kind": "semantics", "state": "error", "error": "RuntimeError: boom"}, tmp_path)
-    answer = tasks.poll_local("t2", tmp_path)
+    answer = tasks.get("t2", store=tasks.FileStore(tmp_path))
     assert (answer["ok"], answer["state"], answer["error"]) == (False, "error", "RuntimeError: boom")
 
 
@@ -66,7 +66,7 @@ def test_the_worker_runs_the_job_named_in_the_task_file(monkeypatch, tmp_path) -
         calls.append(request)
         return {"ok": True, "echo": request}
 
-    monkeypatch.setattr(tasks, "_import", lambda target: fake_job)
+    monkeypatch.setattr(tasks, "_job", lambda target: fake_job)
     tasks.write(
         {"task_id": "t3", "kind": "semantics", "state": "running", "request": {"urls": ["https://a.example/"]}},
         tmp_path,
@@ -84,7 +84,7 @@ def test_a_crashing_job_leaves_an_error_task(monkeypatch, tmp_path) -> None:
     async def boom(request: dict):
         raise RuntimeError("service exploded")
 
-    monkeypatch.setattr(tasks, "_import", lambda target: boom)
+    monkeypatch.setattr(tasks, "_job", lambda target: boom)
     tasks.write({"task_id": "t4", "kind": "semantics", "state": "running", "request": {}}, tmp_path)
 
     tasks.run_task("t4", tmp_path)
@@ -96,7 +96,7 @@ def test_a_crashing_job_leaves_an_error_task(monkeypatch, tmp_path) -> None:
 
 def test_wait_returns_after_the_first_terminal_state(monkeypatch, tmp_path) -> None:
     tasks.write({"task_id": "t5", "kind": "semantics", "state": "done", "report": {"ok": True}}, tmp_path)
-    assert tasks.wait_local("t5", tmp_path, poll_interval=0)["state"] == "done"
+    assert tasks.wait("t5", store=tasks.FileStore(tmp_path), poll_interval=0)["state"] == "done"
 
 
 def test_the_cli_reads_a_task_and_exits_by_its_state(monkeypatch, tmp_path, capsys) -> None:

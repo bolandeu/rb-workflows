@@ -187,6 +187,24 @@ async def collect(
     return report
 
 
+def report_from_remote(payload: dict) -> dict:
+    """Arsenkin's `get` answer → our report: the check-top body is echoed, the collect is summarised."""
+    request = (payload.get("result") or {}).get("request") or {}
+    se = [{"type": entry.get("ss"), "region": entry.get("region")} for entry in request.get("ss") or []]
+    body = {
+        "queries": request.get("queries") or [],
+        "se": se,
+        "depth": request.get("depth") or 10,
+        "is_snippet": request.get("is_snippet"),
+        "noreask": request.get("is_noreask"),
+    }
+    collect = ((payload.get("result") or {}).get("result") or {}).get("collect") or []
+    return build_report(request=body, source="arsenkin", collect=collect, task_id=payload.get("task_id"))
+
+
+tasks.REPORTS["top"] = report_from_remote
+
+
 def build_report(
     *,
     request: Mapping,
@@ -313,81 +331,13 @@ async def submit(
     if source not in SOURCE_NAMES:
         raise ValueError(f"unknown source '{source}'; known: {', '.join(SOURCE_NAMES)}")
     data = normalise(request)
-    if source == "arsenkin":
-        # their id is the task: no local file, the service owns the state
-        task_id = f"arsenkin:{await set_remote(data, token=token)}"
-        return {
-            "ok": True,
-            "task_id": task_id,
-            "source": source,
-            "state": "running",
-            "poll_after_s": 15,
-            "poll": f"wf task {task_id} --json",
-        }
-    return await tasks.submit("top", {"request": data, **kwargs}, store=tasks.FileStore(tasks_dir))
+    # `source` decides the store: `arsenkin` places their task, `serp` runs a worker of this CLI
+    return await tasks.submit("top", {"request": data, **kwargs, "store": source}, store=tasks.default_store(tasks_dir))
 
 
 async def poll(task_id: str, *, tasks_dir: Path | None = None, token: str | None = None) -> dict:
-    """The state of a task, or its report once it is done. A failed task is `ok: false` with its error.
-
-    The id names its store: `arsenkin:32070249` is asked of Arsenkin itself, `local:…` is read here.
-    """
-    store, name = tasks.split_id(task_id)
-    if store == "arsenkin":
-        return await _poll_remote(int(name), token=token)
-    return tasks.get(task_id, store=tasks.FileStore(tasks_dir))
-
-
-async def _poll_remote(remote_id: int, *, token: str | None = None) -> dict:
-    """Ask Arsenkin about its own task and turn a finished one into our report."""
-    status = await remote_state(remote_id, token=token)
-    remote = str(status.get("status") or "").lower()
-    if remote in arsenkin.DONE:
-        return await _remote_report(remote_id, token=token)
-    if remote in arsenkin.FAILED:
-        return {
-            "ok": False,
-            "state": "error",
-            "task_id": f"arsenkin:{remote_id}",
-            "error": f"arsenkin task {remote_id} ended as '{remote}': {status.get('msg') or ''}".strip(),
-        }
-    return {
-        "ok": True,
-        "state": "process",
-        "task_id": f"arsenkin:{remote_id}",
-        "progress": status.get("progress"),
-        "retry_after_s": 15,
-    }
-
-
-async def _remote_report(remote_id: int, *, token: str | None = None) -> dict:
-    answer = await remote_result(remote_id, token=token)
-    request = (answer.get("result") or {}).get("request") or {}
-    data = (
-        normalise(
-            {
-                "queries": request.get("queries") or [],
-                "se": [{"type": se.get("ss"), "region": se.get("region")} for se in request.get("ss") or []],
-                "depth": request.get("depth") or 10,
-            }
-        )
-        if request
-        else {"queries": [], "se": [], "depth": 10, "is_snippet": False, "noreask": False}
-    )
-    return {
-        "ok": True,
-        "state": "done",
-        "task_id": f"arsenkin:{remote_id}",
-        "source": "arsenkin",
-        "result": {"request": request, "result": (answer.get("result") or {}).get("result") or {}},
-        "summary": summary(
-            ((answer.get("result") or {}).get("result") or {}).get("collect") or [],
-            queries=data["queries"],
-            se=data["se"],
-            depth=data["depth"],
-            top_n=10,
-        ),
-    }
+    """The state of a task, or its report once it is done — the id names the store that answers."""
+    return await asyncio.to_thread(tasks.get, task_id, store=tasks.default_store(tasks_dir))
 
 
 async def wait(task_id: str, *, tasks_dir: Path | None = None, poll_interval: float | None = None) -> dict:

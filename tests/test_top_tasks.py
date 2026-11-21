@@ -76,7 +76,7 @@ def test_the_worker_finishes_the_task_and_stores_the_report(monkeypatch, tmp_pat
     tasks.write(
         {"task_id": "t4", "kind": "top", "state": "running", "request": {"request": top.normalise(REQUEST)}}, tmp_path
     )
-    monkeypatch.setattr(tasks, "_import", lambda target: _fake_collect)
+    monkeypatch.setattr(tasks, "_job", lambda target: _fake_collect)
 
     tasks.run_task("t4", tmp_path)
 
@@ -92,7 +92,7 @@ def test_a_worker_that_crashes_leaves_an_error_task_not_a_traceback(monkeypatch,
     tasks.write(
         {"task_id": "t5", "kind": "top", "state": "running", "request": {"request": top.normalise(REQUEST)}}, tmp_path
     )
-    monkeypatch.setattr(tasks, "_import", lambda target: boom)
+    monkeypatch.setattr(tasks, "_job", lambda target: boom)
 
     tasks.run_task("t5", tmp_path)
 
@@ -104,45 +104,42 @@ def test_a_worker_that_crashes_leaves_an_error_task_not_a_traceback(monkeypatch,
 def test_submitting_to_arsenkin_only_places_the_task_and_remembers_the_remote_id(monkeypatch, tmp_path) -> None:
     placed: list[dict] = []
 
-    async def fake_set(data, **kwargs):
-        placed.append(data)
-        return 777
+    class FakeStore:
+        def create(self, kind: str, request: dict) -> dict:
+            placed.append(request)
+            return {"task_id": "arsenkin:top:777", "kind": kind, "state": "running"}
 
-    monkeypatch.setattr(top, "set_remote", fake_set)
+    monkeypatch.setattr(top.tasks, "default_store", lambda base=None: FakeStore())
     answer = _run(top.submit(REQUEST, source="arsenkin", tasks_dir=tmp_path))
 
     assert answer["state"] == "running"
-    assert placed and placed[0]["queries"] == ["диван"]
-    assert answer["task_id"] == "arsenkin:777"  # their id is the task; no local file is written
-    assert answer["poll"] == "wf task arsenkin:777 --json"
+    assert answer["task_id"] == "arsenkin:top:777"  # their id is the task; nothing local is written
+    assert answer["poll"] == "wf task arsenkin:top:777 --json"
+    assert placed[0]["request"]["queries"] == ["диван"]
+    assert placed[0]["store"] == "arsenkin"
 
 
-def test_polling_an_arsenkin_task_reads_the_remote_state(monkeypatch, tmp_path) -> None:
-    async def pending(remote_id, **kwargs):
-        return {"status": "process", "progress": 40}
+def test_polling_an_arsenkin_task_reads_the_remote_state(monkeypatch) -> None:
+    class FakeStore:
+        def __init__(self, task: dict) -> None:
+            self.task = task
 
-    monkeypatch.setattr(top, "remote_state", pending)
-    answer = _run(top.poll("arsenkin:777"))
+        def get(self, task_id: str) -> dict:
+            return self.task
+
+    monkeypatch.setattr(
+        top.tasks, "default_store", lambda base=None: FakeStore({"state": "process", "progress": 40, "kind": "top"})
+    )
+    answer = _run(top.poll("arsenkin:top:777"))
     assert (answer["state"], answer["progress"]) == ("process", 40)
 
-    async def finished(remote_id, **kwargs):
-        return {"status": "finish"}
-
-    async def result(remote_id, **kwargs):
-        return {
-            "task_id": remote_id,
-            "result": {
-                "request": {"queries": ["диван"], "depth": 10, "ss": [{"ss": 1, "region": 213}]},
-                "result": {"collect": [[["https://a/9"]]]},
-            },
-        }
-
-    monkeypatch.setattr(top, "remote_state", finished)
-    monkeypatch.setattr(top, "remote_result", result)
-    answer = _run(top.poll("arsenkin:777"))
+    report = top.build_report(request=top.normalise(REQUEST), source="arsenkin", collect=[[["https://a/9"]]])
+    monkeypatch.setattr(
+        top.tasks, "default_store", lambda base=None: FakeStore({"state": "done", "kind": "top", "report": report})
+    )
+    answer = _run(top.poll("arsenkin:top:777"))
     assert answer["state"] == "done"
     assert answer["result"]["result"]["collect"] == [[["https://a/9"]]]
-    assert answer["summary"]["top"][0]["url"] == "https://a/9"
 
 
 def test_wait_blocks_until_the_task_finishes(monkeypatch, tmp_path) -> None:

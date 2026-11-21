@@ -96,6 +96,11 @@ async def task_state(client: httpx.AsyncClient, token: str, task_id: int) -> dic
     return await _post(client, token, "check", {"task_id": task_id})
 
 
+async def cancel_task(client: httpx.AsyncClient, token: str, task_id: int) -> dict:
+    """Delete a running task (`/api/tools/tasks`, `action: delete`): the documented way to stop paying for it."""
+    return await _post(client, token, "tasks", {"action": "delete", "task_id": task_id})
+
+
 async def task_result(client: httpx.AsyncClient, token: str, task_id: int) -> dict:
     """The raw `get` answer of a finished task."""
     payload = await _post(client, token, "get", {"task_id": task_id})

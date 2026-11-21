@@ -307,7 +307,7 @@ def _tasks(args: argparse.Namespace) -> int:
             )
         )
         raise SystemExit(2)
-    store = tasks_module.FileStore(tasks_dir)
+    store = tasks_module.default_store(tasks_dir)
     if args.cancel:
         answer = tasks_module.cancel(args.id, store=store)
     else:
@@ -405,7 +405,7 @@ def _semantics(args: argparse.Namespace) -> int:
                     "timeout": args.timeout,
                     "poll_interval": args.poll_interval,
                 },
-                store=tasks_module.FileStore(Path(args.tasks_dir) if args.tasks_dir else None),
+                store=tasks_module.default_store(Path(args.tasks_dir) if args.tasks_dir else None),
             )
         )
         if args.json:
