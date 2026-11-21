@@ -98,7 +98,8 @@ wf task --gc --older-than 7 --json                              # убрать �
 а отчёт читается тем, что читает их ответ. Источник выбирается: наш `serp` (по умолчанию) или сам Arsenkin.
 
 ```bash
-wf top --input top.json --source serp --json          # наш serp search
+wf top --queries "ремонт киа" --se 1:213 --json          # то же, но флагами
+wf top --input top.json --source serp --json            # наш serp search
 wf top --input top.json --source arsenkin --json      # их задача check-top
 ```
 

@@ -263,3 +263,47 @@ def test_the_cli_refuses_an_unknown_source(capsys) -> None:
         cli.main(["top", "--input", "x.json", "--source", "google"])
     assert exit_info.value.code == 2
     assert json.loads(capsys.readouterr().out)["error"]["code"] == "INVALID_ARGUMENTS"
+
+
+def test_flags_build_the_same_body_the_input_file_carries(monkeypatch, capsys) -> None:
+    from rb_workflows import cli
+
+    seen: list[dict] = []
+
+    async def fake_collect(request, **kwargs):
+        seen.append(dict(request) if isinstance(request, dict) else request)
+        return top.build_report(request=top.normalise(request), source="serp", collect=[])
+
+    monkeypatch.setattr(top, "collect", fake_collect)
+    code = cli.main(
+        [
+            "top",
+            "--queries",
+            "ремонт киа",
+            "автосервис киа",
+            "--se",
+            "1:213,11:1011969",
+            "--depth",
+            "20",
+            "--is-snippet",
+            "--json",
+        ]  # fmt: skip
+    )
+
+    assert code == 0
+    assert seen[0] == {
+        "queries": ["ремонт киа", "автосервис киа"],
+        "se": [{"type": 1, "region": 213}, {"type": 11, "region": 1011969}],
+        "depth": 20,
+        "is_snippet": True,
+        "noreask": False,
+    }
+
+
+def test_a_malformed_se_is_refused_in_the_envelope(capsys) -> None:
+    from rb_workflows import cli
+
+    with pytest.raises(SystemExit) as exit_info:
+        cli.main(["top", "--queries", "q", "--se", "yandex:213"])
+    assert exit_info.value.code == 2
+    assert "--se expects type:region" in json.loads(capsys.readouterr().out)["error"]["message"]

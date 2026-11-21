@@ -72,6 +72,14 @@ def _parser() -> argparse.ArgumentParser:
     tasks_cmd.add_argument("--json", action="store_true", help="the report as JSON (the contract)")
     top_cmd = sub.add_parser("top", help="positions in Arsenkin's check-top shape, from our serp or from Arsenkin")
     top_cmd.add_argument("--input", help="JSON file with the check-top body (or the bare data object)")
+    top_cmd.add_argument("--queries", nargs="+", help="queries to check (instead of --input)")
+    top_cmd.add_argument(
+        "--se",
+        help="search engines as type:region, e.g. 1:213,11:1011969 — 1/2/3 Yandex, 11/12 Google, 20/21 YouTube",
+    )
+    top_cmd.add_argument("--depth", type=int, default=10, help="results per query (5, 10, 20, 30, 50 or 100)")
+    top_cmd.add_argument("--is-snippet", action="store_true", help="collect snippets from the results")
+    top_cmd.add_argument("--noreask", action="store_true", help="do not let the engine rewrite the query")
     top_cmd.add_argument("--submit", action="store_true", help="place the task and answer with its id at once")
     top_cmd.add_argument("--task", metavar="ID", help="read a submitted task: its state, or the report when it is done")
     top_cmd.add_argument("--wait", action="store_true", help="with --task: block until the task finishes")
@@ -182,6 +190,11 @@ DESCRIBE = {
                 "description": "positions in Arsenkin's check-top shape, from our serp or from Arsenkin",
                 "options": [
                     _param("--input", "path"),
+                    _param("--queries", "str", multiple=True),
+                    _param("--se", "str"),
+                    _param("--depth", "int", 10),
+                    _param("--is-snippet", "boolean", False),
+                    _param("--noreask", "boolean", False),
                     _param("--source", "choice", "serp"),
                     _param("--top-n", "int", 10),
                     _param("--concurrency", "int", 3),
@@ -207,6 +220,11 @@ DESCRIBE = {
                 "description": "positions in Arsenkin's check-top shape, from our serp or from Arsenkin",
                 "options": [
                     _param("--input", "path"),
+                    _param("--queries", "str", multiple=True),
+                    _param("--se", "str"),
+                    _param("--depth", "int", 10),
+                    _param("--is-snippet", "boolean", False),
+                    _param("--noreask", "boolean", False),
                     _param("--source", "choice", "serp"),
                     _param("--top-n", "int", 10),
                     _param("--concurrency", "int", 3),
@@ -304,6 +322,33 @@ def main(argv: list[str] | None = None) -> int:
     return 0 if result["ok"] else 1
 
 
+def _check_top_body(args: argparse.Namespace) -> dict:
+    """`--queries … --se 1:213,11:1011969 --depth 10` → the check-top body Arsenkin documents."""
+    se = []
+    for part in (args.se or "1:213").split(","):
+        kind, _, region = part.strip().partition(":")
+        try:
+            se.append({"type": int(kind), "region": int(region)})
+        except ValueError:
+            print(
+                json.dumps(
+                    {
+                        "ok": False,
+                        "error": {"code": "INVALID_ARGUMENTS", "message": f"--se expects type:region, got '{part}'"},
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            raise SystemExit(2) from None
+    return {
+        "queries": list(args.queries),
+        "se": se,
+        "depth": args.depth,
+        "is_snippet": args.is_snippet,
+        "noreask": args.noreask,
+    }
+
+
 def _tasks(args: argparse.Namespace) -> int:
     from pathlib import Path
 
@@ -371,21 +416,24 @@ def _top(args: argparse.Namespace) -> int:
         else:
             print(f"{args.id}: {answer.get('state')}")
         return 0 if answer.get("ok") and answer.get("state") != "error" else 1
-    if not args.input:
+    if args.input:
+        request = json.loads(Path(args.input).read_text(encoding="utf-8"))
+    elif args.queries:
+        request = _check_top_body(args)
+    else:
         print(
             json.dumps(
                 {
                     "ok": False,
                     "error": {
                         "code": "INVALID_ARGUMENTS",
-                        "message": "nothing to do: pass --input (to run or submit) or --task ID (to read a submitted task)",
+                        "message": "nothing to do: pass --input or --queries/--se, or --task ID to read a submitted task",
                     },
                 },
                 ensure_ascii=False,
             )
         )
         raise SystemExit(2)
-    request = json.loads(Path(args.input).read_text(encoding="utf-8"))
     if args.submit:
         answer = asyncio.run(top_source.submit(request, source=args.source, tasks_dir=tasks_dir))
         if args.json:
