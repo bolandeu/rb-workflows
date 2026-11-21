@@ -147,7 +147,7 @@ def clusters(tops: Mapping[str, list[str]], *, group: str, count: int) -> list[l
     """
     phrases = list(tops)
     union = _Union(phrases)
-    urls = {phrase: set(tops[phrase]) for phrase in phrases}
+    urls = {phrase: {canonical(url) for url in tops[phrase]} for phrase in phrases}
     for index, left in enumerate(phrases):
         for right in phrases[index + 1 :]:
             shared = len(urls[left] & urls[right])
@@ -169,21 +169,68 @@ def _host(url: str) -> str:
     return host[4:] if host.startswith("www.") else host
 
 
+# Query parameters that never change the page: they must not split one URL into two in the overlap.
+TRACKING = frozenset(
+    {
+        "utm_source",
+        "utm_medium",
+        "utm_campaign",
+        "utm_term",
+        "utm_content",
+        "yclid",
+        "gclid",
+        "fbclid",
+        "from",
+        "ref",
+        "_openstat",
+    }
+)
+# Files an engine may show instead of the bare directory: the same main page under another address.
+INDEX_FILES = frozenset({"index.html", "index.htm", "index.php", "index.shtml", "default.aspx", "default.html"})
+
+
+def canonical(url: str) -> str:
+    """The form two addresses of one page share: no scheme, no `www.`/`m.`, no trailing slash, no tracking query.
+
+    `http://www.A.ru/1/`, `https://a.ru/1` and `https://a.ru/1?utm_source=x` all become `a.ru/1`, so the overlap of two
+    tops is the overlap of their pages and not of their spellings. A query that is not tracking is kept (sorted), so
+    `?color=red` still tells a page from its neighbours.
+    """
+    parts = urlsplit(url if "//" in url else f"//{url}")
+    host = (parts.hostname or "").lower().rstrip(".")
+    for prefix in ("www.", "m."):
+        if host.startswith(prefix):
+            host = host[len(prefix) :]
+            break
+    path = parts.path.rstrip("/")
+    if path.rsplit("/", 1)[-1].lower() in INDEX_FILES:
+        path = path.rsplit("/", 1)[0]
+    query = "&".join(
+        sorted(chunk for chunk in parts.query.split("&") if chunk and chunk.partition("=")[0].lower() not in TRACKING)
+    )
+    return f"{host}{path}" + (f"?{query}" if query else "")
+
+
 def _is_main(url: str) -> bool:
     """A main page: the path is empty or `/`, whatever the query string."""
-    return urlsplit(url).path in {"", "/"}
+    return not urlsplit(url).path.strip("/") or canonical(url) == _host(url)
 
 
 def _keep(urls: Iterable[str], data: Mapping) -> list[str]:
     """The top of one query after the stoplist and, when `main` is set, without the main pages."""
     stopped = {_host(entry) for entry in data["stoplist"]}
     kept = []
+    seen = set()
     for url in urls:
         host = _host(url)
         if any(host == entry or host.endswith(f".{entry}") for entry in stopped):
             continue
         if data["main"] and _is_main(url):
             continue
+        key = canonical(url)
+        if key in seen:
+            continue
+        seen.add(key)
         kept.append(url)
     return kept
 
@@ -359,28 +406,52 @@ def _row(
         words,
         key=lambda phrase: ((frequencies.get(phrase) or {}).get("broad") or 0, -words.index(phrase)),
     )
+    per_word = [
+        {
+            "query": phrase,
+            **_words(frequencies, phrase, data["ws"]),
+            "main": sum(1 for url in raw.get(phrase) or [] if _is_main(url)),
+            "agregators": None,
+            "toponim": None,
+        }
+        for phrase in words
+    ]
     return {
         "clustered": name,
         "words": words,
         "wssumm": wssumm,
         "topurl": topurl,
-        "main": sum(1 for phrase in words for url in raw.get(phrase) or [] if _is_main(url)),
+        "topurls": dict(sorted(counts.items(), key=lambda item: (-item[1], item[0]))),
+        "main": sum(int(word["main"] or 0) for word in per_word),
         "agregators": None,
         "geo": None,
-        "queries": [{"query": phrase, **_words(frequencies, phrase, data["ws"])} for phrase in words],
+        "queries": per_word,
     }
 
 
-def report_from_remote(payload: dict) -> dict:
-    """Arsenkin's `get` answer → our report: their clusters under `result.result`, our summary around them."""
-    body = (payload.get("result") or {}).get("request") or {}
-    raw = (payload.get("result") or {}).get("result") or []
-    rows = raw if isinstance(raw, list) else (raw.get("clusters") or raw.get("result") or [])
+def report_from_remote(payload: dict, request: Mapping | None = None) -> dict:
+    """Arsenkin's `get` answer → our report.
+
+    Their shape: `result.clustering.clustered` — the groups by name, `result.clustering.single` — the phrases that
+    stayed alone; each item holds `words` (phrase → `ws`, `main`, `agregators`, `toponim`), `wssumm`, `topurl` and
+    `topurls` (URL → how many phrases of the cluster put it in the top). `result.stats` rolls the task up.
+    """
+    result = payload.get("result") or {}
+    body = result.get("request") or request or {}
     data = {
         key: body[key]
         for key in ("queries", "se", "region", "group", "count", "depth", "stoplist", "ws", "main")
         if key in body
     }
+    grouping = result.get("clustering")
+    if isinstance(grouping, Mapping):
+        rows = [_remote_cluster(name, item) for name, item in (grouping.get("clustered") or {}).items()]
+        rows += [_remote_cluster(name, item) for name, item in (grouping.get("single") or {}).items()]
+        rows.sort(key=lambda row: (-(row["wssumm"] or 0), -len(row["words"])))
+    else:  # another container: a bare list, or one under `clusters`
+        found = result.get("result") or []
+        rows = found if isinstance(found, list) else (found.get("clusters") or found.get("result") or [])
+    stats = result.get("stats") or {}
     overview = [
         {
             "clustered": row.get("clustered"),
@@ -398,11 +469,47 @@ def report_from_remote(payload: dict) -> dict:
         "task_id": payload.get("task_id"),
         "result": {"request": body, "result": rows},
         "summary": {
-            "clusters_total": len(rows),
-            "queries_total": len(data.get("queries") or []),
+            "clusters_total": len(overview),
+            "queries_total": len(data.get("queries") or []) or stats.get("words") or 0,
             "skipped": [],
+            "single": stats.get("single"),
+            "single_percent": stats.get("singlePersent"),
+            "domains": (stats.get("domains") or {}).get("hosts"),
             "clusters": overview,
         },
+    }
+
+
+def _remote_cluster(name: str, item: Mapping) -> dict:
+    """One of their clusters in our fields: `agregators` is the worst share among its phrases, `geo` is not sent."""
+    phrases = item.get("words") or {}
+    per_word = [_remote_word(phrase, phrases[phrase] or {}) for phrase in phrases]
+    shares = [word["agregators"] for word in per_word if word["agregators"] is not None]
+    return {
+        "clustered": name,
+        "words": list(phrases),
+        "wssumm": item.get("wssumm"),
+        "topurl": item.get("topurl"),
+        "topurls": item.get("topurls") or {},
+        "main": sum(word["main"] or 0 for word in per_word),
+        "agregators": max(shares) if shares else None,
+        "geo": None,
+        "queries": per_word,
+    }
+
+
+def _remote_word(phrase: str, item: Mapping) -> dict:
+    """One phrase of their cluster: `ws` is the broad frequency they collected, `-` is their `no toponym`."""
+    ws = item.get("ws")
+    toponim = item.get("toponim")
+    return {
+        "query": phrase,
+        "ws": ws,
+        "ws_strict": item.get("ws_strict"),
+        "ws_types": {"base": ws},
+        "main": item.get("main"),
+        "agregators": item.get("agregators"),
+        "toponim": None if toponim in (None, "-", "") else toponim,
     }
 
 
@@ -464,7 +571,7 @@ async def _from_arsenkin(data: Mapping, *, token: str | None, poll_interval: flo
         payload = await arsenkin.collect_clustering(
             client, secret, _echo(data), poll_interval=poll_interval, timeout=timeout
         )
-    return report_from_remote(payload)
+    return report_from_remote(payload, data)
 
 
 # --- a task that outlives the call -----------------------------------------------------------------------------

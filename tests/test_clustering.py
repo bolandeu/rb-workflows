@@ -35,7 +35,7 @@ def _fake_tools(monkeypatch, *, frequencies: bool = False) -> list[list[str]]:
     """A stand-in for both CLIs: `serp search` answers the tops of ROWS, `wordstat search` the frequencies."""
     calls: list[list[str]] = []
 
-    def run(argv, **kwargs):
+    def run(argv, **_):
         calls.append(list(argv))
         if argv[0] == "wordstat":
             return subprocess.CompletedProcess(
@@ -141,7 +141,7 @@ def test_wordstat_is_asked_only_when_ws_names_a_frequency_and_feeds_wssumm(monke
 def test_the_arsenkin_source_sends_the_documented_body_and_reads_their_answer(monkeypatch) -> None:
     sent: list[tuple[str, dict]] = []
 
-    async def fake_post(client, token, path, body):
+    async def fake_post(_client, _token, path, body):
         sent.append((path, body))
         if path == "set":
             return {"code": "SET_TASK_OK", "task_id": 11, "cost": 2}
@@ -175,7 +175,7 @@ def test_the_cli_builds_the_body_from_flags_and_prints_the_report(monkeypatch, c
 
     seen: list[dict] = []
 
-    async def fake_collect(request, **kwargs):
+    async def fake_collect(request, **_):
         seen.append(dict(request))
         return {"ok": True, "summary": {"clusters_total": 1, "queries_total": 1}, "result": {"result": []}}
 
@@ -195,3 +195,63 @@ def test_the_cli_refuses_a_call_without_queries_or_a_task(capsys) -> None:
         cli.main(["clustering", "--json"])
     assert exit_info.value.code == 2
     assert json.loads(capsys.readouterr().out)["error"]["code"] == "INVALID_ARGUMENTS"
+
+
+def test_one_page_under_two_spellings_is_one_url_in_the_overlap() -> None:
+    assert clustering.canonical("http://www.A.ru/1/?utm_source=x") == "a.ru/1"
+    assert clustering.canonical("https://a.ru/1") == "a.ru/1"
+    assert clustering.canonical("https://m.a.ru/1?b=2&a=1") == "a.ru/1?a=1&b=2"  # a real query still tells pages apart
+    assert clustering.canonical("https://a.ru/index.html") == "a.ru"
+    tops = {"a": ["https://a.ru/1", "https://a.ru/2"], "b": ["http://a.ru/1/", "https://www.a.ru/2"]}
+    assert clustering.clusters(tops, group="hard", count=2) == [["a", "b"]]
+
+
+def test_a_main_page_is_recognised_under_its_other_addresses() -> None:
+    assert clustering._is_main("https://a.ru/")
+    assert clustering._is_main("https://www.a.ru/index.html")
+    assert not clustering._is_main("https://a.ru/1")
+
+
+def test_their_real_answer_is_read_into_clusters_with_the_single_phrases_too() -> None:
+    payload = {
+        "task_id": 5,
+        "result": {
+            "clustering": {
+                "clustered": {
+                    "аутсорсинг вэд": {
+                        "words": {
+                            "аутсорсинг вэд": {"ws": 129, "main": 0, "agregators": 0, "toponim": "-"},
+                            "услуги вэд москва": {"ws": 25, "main": 3, "agregators": 10, "toponim": "москва"},
+                        },
+                        "wssumm": 154,
+                        "topurl": "https://a.ru/1",
+                        "topurls": {"https://a.ru/1": 2},
+                    }
+                },
+                "single": {
+                    "траско смоленск": {
+                        "words": {"траско смоленск": {"ws": 3, "main": 1, "agregators": 0, "toponim": "-"}},
+                        "wssumm": 3,
+                        "topurl": "https://b.ru/2",
+                        "topurls": {"https://b.ru/2": 1},
+                    }
+                },
+            },
+            "stats": {"words": 3, "single": 1, "singlePersent": 33, "domains": {"hosts": {"a.ru": {"cnt": 2}}}},
+        },
+    }
+
+    report = clustering.report_from_remote(payload)
+
+    assert report["summary"]["clusters_total"] == 2
+    assert (report["summary"]["single"], report["summary"]["single_percent"]) == (1, 33)
+    first = report["result"]["result"][0]
+    assert (first["clustered"], first["words"], first["wssumm"], first["main"]) == (
+        "аутсорсинг вэд",
+        ["аутсорсинг вэд", "услуги вэд москва"],
+        154,
+        3,
+    )
+    assert first["agregators"] == 10  # the worst share among the phrases
+    assert first["queries"][1]["toponim"] == "москва"
+    assert first["queries"][0]["toponim"] is None  # their `-` is “no toponym”
