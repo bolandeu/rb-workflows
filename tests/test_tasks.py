@@ -117,3 +117,43 @@ def test_the_cli_submits_a_semantics_job(monkeypatch, tmp_path, capsys) -> None:
     code = cli.main(["semantics", "--urls", "https://a.example/", "--submit", "--tasks-dir", str(tmp_path), "--json"])
     answer = json.loads(capsys.readouterr().out)
     assert (code, answer["kind"], answer["state"]) == (0, "semantics", "running")
+
+
+def test_cancelling_a_running_task_stops_its_worker(monkeypatch, tmp_path) -> None:
+    signals: list[tuple[int, int]] = []
+    monkeypatch.setattr(tasks.os, "kill", lambda pid, sig: signals.append((pid, sig)))
+    tasks.write({"task_id": "t8", "kind": "semantics", "state": "running", "request": {}, "pid": 4242}, tmp_path)
+
+    answer = _run(tasks.cancel("t8", store=tasks.FileStore(tmp_path)))
+
+    assert answer["state"] == "cancelled"
+    assert signals == [(4242, 15)]  # SIGTERM, and only to the worker of this task
+    assert tasks.read("t8", tmp_path)["state"] == "cancelled"
+
+
+def test_cancelling_a_finished_task_changes_nothing(monkeypatch, tmp_path) -> None:
+    signals: list[tuple[int, int]] = []
+    monkeypatch.setattr(tasks.os, "kill", lambda pid, sig: signals.append((pid, sig)))
+    tasks.write(
+        {"task_id": "t9", "kind": "semantics", "state": "done", "request": {}, "pid": 1, "report": {}}, tmp_path
+    )
+
+    answer = _run(tasks.cancel("t9", store=tasks.FileStore(tmp_path)))
+
+    assert answer["state"] == "done"
+    assert signals == []
+
+
+def test_a_worker_that_finishes_after_cancelling_does_not_overwrite_the_state(monkeypatch, tmp_path) -> None:
+    async def slow_job(request: dict) -> dict:
+        tasks.update("ta", tmp_path, state="cancelled")  # the caller cancelled while the job was running
+        return {"ok": True, "late": True}
+
+    monkeypatch.setattr(tasks, "_job", lambda target: slow_job)
+    tasks.write({"task_id": "ta", "kind": "semantics", "state": "running", "request": {}}, tmp_path)
+
+    tasks.run_task("ta", tmp_path)
+
+    stored = tasks.read("ta", tmp_path)
+    assert stored["state"] == "cancelled"
+    assert "report" not in stored  # the late report is not news for a caller who cancelled

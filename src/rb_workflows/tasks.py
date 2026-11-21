@@ -18,6 +18,7 @@ import importlib
 import json
 import os
 import secrets
+import signal
 import subprocess
 import sys
 import time
@@ -134,6 +135,17 @@ def spawn(task_id: str, base: Path | None = None) -> int:
     return process.pid
 
 
+def stop_worker(pid: object) -> bool:
+    """SIGTERM the worker of a local task; True when it was alive. A missing process is not an error."""
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except (OSError, ValueError):
+        return False
+    return True
+
+
 def _job(target: str):
     """`"module:function"` → the function, imported late so a missing optional dep breaks one job, not the module."""
     module_name, _, attribute = target.partition(":")
@@ -145,9 +157,13 @@ def run_task(task_id: str, base: Path | None = None) -> None:
     task = read(task_id, base)
     try:
         report = asyncio.run(_job(KINDS[task["kind"]])(task["request"]))
-        update(task_id, base, state="done", report=report)
+        result: dict = {"state": "done", "report": report}
     except Exception as exc:  # a worker must leave a readable state, not a traceback in a log
-        update(task_id, base, state="error", error=f"{type(exc).__name__}: {exc}"[:400])
+        result = {"state": "error", "error": f"{type(exc).__name__}: {exc}"[:400]}
+    # a task cancelled while the worker was busy keeps its state: the caller asked for it, the report is late news
+    if read(task_id, base).get("state") == "cancelled":
+        return
+    update(task_id, base, **result)
 
 
 # --- stores ----------------------------------------------------------------------------------------------------
@@ -180,7 +196,13 @@ class FileStore:
         return write(task, self.base)
 
     async def cancel(self, task_id: str) -> dict:
-        return update(task_id, self.base, state="cancelled", cancelled_at=time.strftime("%Y-%m-%dT%H:%M:%SZ"))
+        """Mark the task cancelled first (so a finishing worker keeps its hands off) and then stop the worker."""
+        task = read(task_id, self.base)
+        if task.get("state") in {"done", "error", "cancelled"}:
+            return task
+        task = update(task_id, self.base, state="cancelled", cancelled_at=time.strftime("%Y-%m-%dT%H:%M:%SZ"))
+        stop_worker(task.get("pid"))
+        return task
 
 
 class ArsenkinStore:
@@ -297,7 +319,8 @@ async def submit(kind: str, request: Mapping, *, store: Store | None = None) -> 
     task = await store.create(kind, request)
     task_id = str(task["task_id"])
     if task_id.startswith("local:"):
-        spawn(task_id, getattr(store, "base", None))
+        pid = spawn(task_id, getattr(store, "base", None))
+        await store.save({**task, "pid": pid})
     return {
         "ok": True,
         "task_id": task_id,
