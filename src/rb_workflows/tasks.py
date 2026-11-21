@@ -157,10 +157,10 @@ def run_task(task_id: str, base: Path | None = None) -> None:
 class Store(Protocol):
     """Four calls a front end needs; a service swaps the file store for its own database without touching a command."""
 
-    def create(self, kind: str, request: Mapping) -> dict: ...
-    def get(self, task_id: str) -> dict: ...
-    def save(self, task: Mapping) -> dict: ...
-    def cancel(self, task_id: str) -> dict: ...
+    async def create(self, kind: str, request: Mapping) -> dict: ...
+    async def get(self, task_id: str) -> dict: ...
+    async def save(self, task: Mapping) -> dict: ...
+    async def cancel(self, task_id: str) -> dict: ...
 
 
 class FileStore:
@@ -169,17 +169,17 @@ class FileStore:
     def __init__(self, base: Path | None = None) -> None:
         self.base = base
 
-    def create(self, kind: str, request: Mapping) -> dict:
+    async def create(self, kind: str, request: Mapping) -> dict:
         task_id = new_id(kind)
         return write({"task_id": task_id, "kind": kind, "state": "running", "request": dict(request)}, self.base)
 
-    def get(self, task_id: str) -> dict:
+    async def get(self, task_id: str) -> dict:
         return read(task_id, self.base)
 
-    def save(self, task: Mapping) -> dict:
+    async def save(self, task: Mapping) -> dict:
         return write(task, self.base)
 
-    def cancel(self, task_id: str) -> dict:
+    async def cancel(self, task_id: str) -> dict:
         return update(task_id, self.base, state="cancelled", cancelled_at=time.strftime("%Y-%m-%dT%H:%M:%SZ"))
 
 
@@ -202,7 +202,7 @@ class ArsenkinStore:
 
         return httpx.AsyncClient(timeout=60.0, trust_env=False)
 
-    def create(self, kind: str, request: Mapping) -> dict:
+    async def create(self, kind: str, request: Mapping) -> dict:
         from .services import arsenkin
 
         data = request.get("request") or request
@@ -211,11 +211,11 @@ class ArsenkinStore:
             async with self._client() as client:
                 return await arsenkin.set_task(client, self._secret(), dict(data))
 
-        remote = asyncio.run(place())
+        remote = await place()
         task_id = new_id(kind, store="arsenkin").rsplit(":", 1)[0] + f":{remote}"
         return {"task_id": task_id, "kind": kind, "state": "running", "remote_task_id": remote}
 
-    def get(self, task_id: str) -> dict:
+    async def get(self, task_id: str) -> dict:
         from .services import arsenkin
 
         _, kind, name = split_id(task_id)
@@ -235,12 +235,12 @@ class ArsenkinStore:
                     return {"state": "error", "error": f"arsenkin task {remote} ended as '{state}'", "progress": None}
                 return {"state": "process", "progress": status.get("progress")}
 
-        return asyncio.run(read_remote())
+        return await read_remote()
 
-    def save(self, task: Mapping) -> dict:
+    async def save(self, task: Mapping) -> dict:
         return dict(task)  # nothing to write: their task is the record
 
-    def cancel(self, task_id: str) -> dict:
+    async def cancel(self, task_id: str) -> dict:
         from .services import arsenkin
 
         _, _, name = split_id(task_id)
@@ -250,7 +250,7 @@ class ArsenkinStore:
                 await arsenkin.cancel_task(client, self._secret(), int(name))
 
         try:
-            asyncio.run(drop())
+            await drop()
         except Exception as exc:  # deleting a finished task is not an error for the caller
             return {"task_id": task_id, "state": "cancelled", "warning": f"{type(exc).__name__}: {exc}"[:200]}
         return {"task_id": task_id, "state": "cancelled"}
@@ -267,18 +267,18 @@ class CompositeStore:
         store, _, _ = split_id(task_id)
         return self.remote if store == "arsenkin" else self.local
 
-    def create(self, kind: str, request: Mapping) -> dict:
+    async def create(self, kind: str, request: Mapping) -> dict:
         store = str(request.get("store") or "local")
-        return (self.remote if store == "arsenkin" else self.local).create(kind, request)
+        return await (self.remote if store == "arsenkin" else self.local).create(kind, request)
 
-    def get(self, task_id: str) -> dict:
-        return self._of(task_id).get(task_id)
+    async def get(self, task_id: str) -> dict:
+        return await self._of(task_id).get(task_id)
 
-    def save(self, task: Mapping) -> dict:
-        return self._of(str(task["task_id"])).save(task)
+    async def save(self, task: Mapping) -> dict:
+        return await self._of(str(task["task_id"])).save(task)
 
-    def cancel(self, task_id: str) -> dict:
-        return self._of(task_id).cancel(task_id)
+    async def cancel(self, task_id: str) -> dict:
+        return await self._of(task_id).cancel(task_id)
 
 
 def default_store(base: Path | None = None) -> Store:
@@ -294,7 +294,7 @@ async def submit(kind: str, request: Mapping, *, store: Store | None = None) -> 
     if kind not in KINDS:
         raise ValueError(f"unknown job '{kind}'; known: {', '.join(sorted(KINDS))}")
     store = store or default_store()
-    task = store.create(kind, request)
+    task = await store.create(kind, request)
     task_id = str(task["task_id"])
     if task_id.startswith("local:"):
         spawn(task_id, getattr(store, "base", None))
@@ -308,10 +308,10 @@ async def submit(kind: str, request: Mapping, *, store: Store | None = None) -> 
     }
 
 
-def get(task_id: str, *, store: Store | None = None) -> dict:
+async def get(task_id: str, *, store: Store | None = None) -> dict:
     """The state of a job — or its report once it is done; a failed or cancelled job is `ok: false` with the reason."""
     store = store or default_store()
-    task = store.get(task_id)
+    task = await store.get(task_id)
     state = task.get("state")
     if state == "done":
         return {**task.get("report", {}), "state": "done", "task_id": task_id}
@@ -327,19 +327,19 @@ def get(task_id: str, *, store: Store | None = None) -> dict:
     }
 
 
-def wait(task_id: str, *, store: Store | None = None, poll_interval: float = 5.0) -> dict:
+async def wait(task_id: str, *, store: Store | None = None, poll_interval: float = 5.0) -> dict:
     """Poll until the job is done, failed or cancelled."""
     while True:
-        answer = get(task_id, store=store)
+        answer = await get(task_id, store=store)
         if answer.get("state") in {"done", "error", "cancelled"}:
             return answer
-        time.sleep(poll_interval)
+        await asyncio.sleep(poll_interval)
 
 
-def cancel(task_id: str, *, store: Store | None = None) -> dict:
+async def cancel(task_id: str, *, store: Store | None = None) -> dict:
     """Stop the job: their task is deleted, a local one is marked (its worker is not interrupted — the answer says so)."""
     store = store or default_store()
-    task = store.cancel(task_id)
+    task = await store.cancel(task_id)
     answer: dict[str, Any] = {"ok": True, "task_id": task_id, "state": task.get("state", "cancelled")}
     if task.get("warning"):
         answer["warning"] = task["warning"]

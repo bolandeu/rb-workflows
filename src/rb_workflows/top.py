@@ -337,7 +337,7 @@ async def submit(
 
 async def poll(task_id: str, *, tasks_dir: Path | None = None, token: str | None = None) -> dict:
     """The state of a task, or its report once it is done — the id names the store that answers."""
-    return await asyncio.to_thread(tasks.get, task_id, store=tasks.default_store(tasks_dir))
+    return await tasks.get(task_id, store=tasks.default_store(tasks_dir))
 
 
 async def wait(task_id: str, *, tasks_dir: Path | None = None, poll_interval: float | None = None) -> dict:

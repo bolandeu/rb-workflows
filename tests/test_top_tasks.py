@@ -105,7 +105,7 @@ def test_submitting_to_arsenkin_only_places_the_task_and_remembers_the_remote_id
     placed: list[dict] = []
 
     class FakeStore:
-        def create(self, kind: str, request: dict) -> dict:
+        async def create(self, kind: str, request: dict) -> dict:
             placed.append(request)
             return {"task_id": "arsenkin:top:777", "kind": kind, "state": "running"}
 
@@ -124,7 +124,7 @@ def test_polling_an_arsenkin_task_reads_the_remote_state(monkeypatch) -> None:
         def __init__(self, task: dict) -> None:
             self.task = task
 
-        def get(self, task_id: str) -> dict:
+        async def get(self, task_id: str) -> dict:
             return self.task
 
     monkeypatch.setattr(

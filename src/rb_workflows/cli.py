@@ -309,9 +309,11 @@ def _tasks(args: argparse.Namespace) -> int:
         raise SystemExit(2)
     store = tasks_module.default_store(tasks_dir)
     if args.cancel:
-        answer = tasks_module.cancel(args.id, store=store)
+        answer = asyncio.run(tasks_module.cancel(args.id, store=store))
     else:
-        answer = tasks_module.wait(args.id, store=store) if args.wait else tasks_module.get(args.id, store=store)
+        answer = asyncio.run(
+            tasks_module.wait(args.id, store=store) if args.wait else tasks_module.get(args.id, store=store)
+        )
     if args.json:
         print(json.dumps(answer, ensure_ascii=False))
     else:
