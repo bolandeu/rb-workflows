@@ -59,3 +59,10 @@ asyncio_default_fixture_loop_scope = "function"
 [tool.rb.install]
 homeserver = ["rbtools"]
 mac = true
+
+[[tool.rb.external]]
+name = "token"
+required = false
+min_version = "0.1"
+check = "token which"
+why = "the machine-wide token store: `token get <service>` supplies a service's API token when the package store has none"

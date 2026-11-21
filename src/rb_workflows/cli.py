@@ -74,7 +74,7 @@ BARE_HELP = """Usage: wf COMMAND
 
 Commands:
   run       run one workflow
-  semantics a keyword set for one URL or a batch, from an external service
+  semantics  a keyword set for one URL or a batch, from an external service
   doctor    readiness of this machine: keys, proxies, the workflow engine
   auth      credentials of the services
   describe  this contract
