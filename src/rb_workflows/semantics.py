@@ -24,6 +24,7 @@ __all__ = ["RateLimiter", "collect", "normalise", "summary"]
 
 MODES = ("url", "domain")
 
+
 def normalise(request: Mapping) -> dict:
     """The job's request from Arsenkin's `semantics` body (or from the bare `data` object), validated.
 
@@ -47,6 +48,7 @@ def normalise(request: Mapping) -> dict:
         "timeout": float(data.get("timeout") or 1800.0),
         "poll_interval": float(data.get("poll_interval") or 15.0),
     }
+
 
 MAX_CONCURRENT = 5  # tasks at once, per the account's own limit
 PER_MINUTE = 30  # requests of any kind, per the account's own limit
@@ -97,7 +99,13 @@ async def _one(
     try:
         async with _LIMITER:
             found = await module.collect(
-                client, token, url, region=region, stopwords=stopwords, mode=mode, timeout=timeout,
+                client,
+                token,
+                url,
+                region=region,
+                stopwords=stopwords,
+                mode=mode,
+                timeout=timeout,
                 poll_interval=poll_interval,
             )
         return {"ok": True, **found}
@@ -196,8 +204,15 @@ async def _collect(
     async def run(url: str) -> dict:
         async with gate:
             return await _one(
-                client, token, module, url,
-                region=region, stopwords=words, mode=mode, timeout=timeout, poll_interval=poll_interval,
+                client,
+                token,
+                module,
+                url,
+                region=region,
+                stopwords=words,
+                mode=mode,
+                timeout=timeout,
+                poll_interval=poll_interval,
             )
 
     async with httpx.AsyncClient(timeout=60.0, trust_env=False) as client:

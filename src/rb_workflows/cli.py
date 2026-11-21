@@ -510,9 +510,7 @@ def _semantics(args: argparse.Namespace) -> int:
         else:
             print(f"{answer['task_id']}: {answer['state']}; {answer['poll']}")
         return 0
-    report = asyncio.run(
-        collect(request, name=args.service, concurrency=args.concurrency or MAX_CONCURRENT)
-    )
+    report = asyncio.run(collect(request, name=args.service, concurrency=args.concurrency or MAX_CONCURRENT))
     if args.json:
         print(json.dumps(report, ensure_ascii=False))
         return 0 if report["ok"] else 1
