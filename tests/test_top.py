@@ -307,3 +307,14 @@ def test_a_malformed_se_is_refused_in_the_envelope(capsys) -> None:
         cli.main(["top", "--queries", "q", "--se", "yandex:213"])
     assert exit_info.value.code == 2
     assert "--se expects type:region" in json.loads(capsys.readouterr().out)["error"]["message"]
+
+
+def test_describe_names_every_command_once_and_says_what_is_required() -> None:
+    from rb_workflows import cli
+
+    commands = cli.DESCRIBE["command"]["commands"]
+    names = [command["name"] for command in commands]
+    assert names == sorted(set(names), key=names.index)  # no duplicate, no leftover of a removed command
+    descriptions = {command["name"]: command.get("description", "") for command in commands}
+    assert "required: queries, se" in descriptions["top"]
+    assert "required: queries (or urls)" in descriptions["semantics"]

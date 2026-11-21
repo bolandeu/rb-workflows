@@ -11,6 +11,15 @@ read by anything that reads theirs:
 
 `collect[query][se]` is the list of URLs in the order of the results, so the two indices are the ones of the input.
 
+Input — a JSON object (`wf top --input file.json`) or the same fields as flags (`--queries`, `--se`, `--depth`):
+    required:  queries  list[str]                  what to check
+               se       list[{type: int, region: int|str}]   1/2/3 Yandex, 11/12 Google, 20/21 YouTube
+    optional:  depth        int   10   results per query, one of 5, 10, 20, 30, 50, 100
+               is_snippet   bool  false  collect the snippets of the results
+               noreask      bool  false  do not let the engine rewrite the query
+The full Arsenkin body (`{"tools_name": "check-top", "data": {...}}`) is accepted as is, and the bare `data`
+object too: a task written for their API runs here unchanged.
+
 Two sources answer the same question: `serp` (our own CLI, the default) and `arsenkin` (their `check-top` task). A search
 engine our CLI cannot ask (YouTube) is not a failure: its list is empty and the report says so in `skipped` — the rest of
 the task is collected. On top of the contract the report carries `summary`: the strength of every URL and the top-N.

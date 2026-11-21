@@ -3,6 +3,17 @@
 The wrapper owns what every service shares: the task limits, the rate limit, the batch fan-out and the report. It
 knows nothing about a service's protocol — that lives behind `services.<name>.collect`.
 
+Input — a JSON object (`wf semantics --input file.json`) or the same fields as flags (`--urls`, `--engine`,
+`--stopwords`):
+    required:  queries  list[str]   URLs in `url` mode, a domain in `domain` mode (`urls` is accepted as a synonym)
+    optional:  mode          str    "url" (default) or "domain"
+               region        str    "msk" (default) or "gru"; `engine` is accepted as a synonym
+               stopwords     list   [] by default, up to 10 000
+               concurrency   int    5 (the account's own limit)
+               timeout       float  1800 s per task
+               poll_interval float  15 s between status checks
+The full Arsenkin body (`{"tools_name": "semantics", "data": {...}}`) is accepted as is, and the bare `data` object too.
+
 A batch does not wait for the first URL to finish: up to `concurrency` URLs are in flight at once (the account allows
 5 tasks), and the account's 30 requests a minute are shared by all of them. A URL that fails is reported as such and
 does not stop the rest.

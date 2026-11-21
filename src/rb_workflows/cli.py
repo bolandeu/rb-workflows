@@ -52,7 +52,11 @@ def _parser() -> argparse.ArgumentParser:
     status_parser.add_argument("--json", action="store_true", help="the report as JSON (the contract)")
     sem = sub.add_parser("semantics", help="a keyword set for one URL or a batch, from an external service")
     sem.add_argument("--urls", nargs="+", help="URLs to collect for (each one is a task of the service)")
-    sem.add_argument("--input", help="JSON file with Arsenkin's semantics body (or the bare data object)")
+    sem.add_argument(
+        "--input",
+        help="JSON file with Arsenkin's semantics body (or the bare data). Required keys: queries; "
+        "optional: mode (url), region (msk), stopwords ([]), concurrency (5), timeout (1800), poll_interval (15)",
+    )
     sem.add_argument("--engine", default="msk", choices=("msk", "gru"), help="msk — Yandex Moscow, gru — Google Moscow")
     sem.add_argument("--service", default="arsenkin", help="which service answers (default: arsenkin)")
     sem.add_argument("--stopwords", help="comma-separated minus-words")
@@ -72,7 +76,11 @@ def _parser() -> argparse.ArgumentParser:
     tasks_cmd.add_argument("--tasks-dir", help="where the task files live (default: the user state dir)")
     tasks_cmd.add_argument("--json", action="store_true", help="the report as JSON (the contract)")
     top_cmd = sub.add_parser("top", help="positions in Arsenkin's check-top shape, from our serp or from Arsenkin")
-    top_cmd.add_argument("--input", help="JSON file with the check-top body (or the bare data object)")
+    top_cmd.add_argument(
+        "--input",
+        help="JSON file with the check-top body (or the bare data). Required keys: queries, se; "
+        "optional: depth (10), is_snippet (false), noreask (false). Flags below build the same body",
+    )
     top_cmd.add_argument("--queries", nargs="+", help="queries to check (instead of --input)")
     top_cmd.add_argument(
         "--se",
@@ -163,7 +171,8 @@ DESCRIBE = {
             },
             {
                 "name": "semantics",
-                "description": "a keyword set for one URL or a batch, from an external service",
+                "description": "a keyword set for one URL or a batch. Input required: queries (or urls); "
+                "optional: mode (url), region (msk), stopwords ([]), concurrency (5) — as a JSON file or as flags",
                 "options": [
                     _param("--urls", "str", multiple=True),
                     _param("--input", "path"),
@@ -190,7 +199,8 @@ DESCRIBE = {
             },
             {
                 "name": "top",
-                "description": "positions in Arsenkin's check-top shape, from our serp or from Arsenkin",
+                "description": "positions in Arsenkin's check-top shape. Input required: queries, se; "
+                "optional: depth (10), is_snippet (false), noreask (false) — as a JSON file or as flags",
                 "options": [
                     _param("--input", "path"),
                     _param("--queries", "str", multiple=True),
@@ -203,52 +213,6 @@ DESCRIBE = {
                     _param("--concurrency", "int", 3),
                     _param("--timeout", "float", 3600.0),
                     _param("--poll-interval", "float", 15.0),
-                    _JSON_OPTION,
-                ],
-            },
-            {
-                "name": "task",
-                "description": "a submitted job: its state, or the report once it is done",
-                "arguments": [_param("id", "str")],
-                "options": [
-                    _param("--wait", "boolean", False),
-                    _param("--cancel", "boolean", False),
-                    _param("--gc", "boolean", False),
-                    _param("--older-than", "float", 7.0),
-                    _JSON_OPTION,
-                ],
-            },
-            {
-                "name": "top",
-                "description": "positions in Arsenkin's check-top shape, from our serp or from Arsenkin",
-                "options": [
-                    _param("--input", "path"),
-                    _param("--queries", "str", multiple=True),
-                    _param("--se", "str"),
-                    _param("--depth", "int", 10),
-                    _param("--is-snippet", "boolean", False),
-                    _param("--noreask", "boolean", False),
-                    _param("--source", "choice", "serp"),
-                    _param("--top-n", "int", 10),
-                    _param("--concurrency", "int", 3),
-                    _param("--timeout", "float", 3600.0),
-                    _param("--poll-interval", "float", 15.0),
-                    _JSON_OPTION,
-                ],
-            },
-            {
-                "name": "serp",
-                "description": "positions in Yandex/Google for a batch of queries, plus the cluster summary",
-                "options": [
-                    _param("--queries", "str", multiple=True),
-                    _param("--engine", "choice", "both"),
-                    _param("--top", "int", 20),
-                    _param("--concurrency", "int", 3),
-                    _param("--provider", "str"),
-                    _param("--cache", "boolean", False),
-                    _param("--max-age", "str"),
-                    _param("--yandex-lr", "int"),
-                    _param("--google-loc", "str"),
                     _JSON_OPTION,
                 ],
             },
