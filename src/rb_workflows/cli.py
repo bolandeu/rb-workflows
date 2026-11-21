@@ -50,6 +50,15 @@ def _parser() -> argparse.ArgumentParser:
     auth_status = auth.add_subparsers(dest="auth_command")
     status_parser = auth_status.add_parser("status", help="where every service's key comes from (never the key)")
     status_parser.add_argument("--json", action="store_true", help="the report as JSON (the contract)")
+    sem = sub.add_parser("semantics", help="a keyword set for one URL or a batch, from an external service")
+    sem.add_argument("--urls", nargs="+", required=True, help="URLs to collect for (each one is a task of the service)")
+    sem.add_argument("--engine", default="msk", choices=("msk", "gru"), help="msk — Yandex Moscow, gru — Google Moscow")
+    sem.add_argument("--service", default="arsenkin", help="which service answers (default: arsenkin)")
+    sem.add_argument("--stopwords", help="comma-separated minus-words")
+    sem.add_argument("--concurrency", type=int, default=None, help="tasks in flight at once (the account allows 5)")
+    sem.add_argument("--timeout", type=float, default=1800.0, help="seconds a single task may take")
+    sem.add_argument("--poll-interval", type=float, default=15.0, help="seconds between status checks")
+    sem.add_argument("--json", action="store_true", help="the report as JSON (the contract)")
     go = sub.add_parser("run", help="run one workflow")
     go.add_argument("workflow", choices=sorted(WORKFLOWS))
     go.add_argument("--input", help='JSON object with the workflow input, e.g. {"urls": ["https://example.com"]}')
@@ -65,6 +74,7 @@ BARE_HELP = """Usage: wf COMMAND
 
 Commands:
   run       run one workflow
+  semantics a keyword set for one URL or a batch, from an external service
   doctor    readiness of this machine: keys, proxies, the workflow engine
   auth      credentials of the services
   describe  this contract
@@ -112,6 +122,20 @@ DESCRIBE = {
                 ],
             },
             {
+                "name": "semantics",
+                "description": "a keyword set for one URL or a batch, from an external service",
+                "options": [
+                    _param("--urls", "str", multiple=True),
+                    _param("--engine", "choice", "msk"),
+                    _param("--service", "str", "arsenkin"),
+                    _param("--stopwords", "str"),
+                    _param("--concurrency", "int"),
+                    _param("--timeout", "float", 1800.0),
+                    _param("--poll-interval", "float", 15.0),
+                    _JSON_OPTION,
+                ],
+            },
+            {
                 "name": "doctor",
                 "description": "readiness of this machine: keys, proxies, the workflow engine",
                 "options": [_JSON_OPTION],
@@ -151,6 +175,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "describe":
         print(json.dumps(DESCRIBE, ensure_ascii=False))
         return 0
+    if args.command == "semantics":
+        return _semantics(args)
     if args.command == "doctor":
         return _doctor()
     if args.command == "auth":
@@ -180,6 +206,31 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())
+
+
+def _semantics(args: argparse.Namespace) -> int:
+    from .semantics import MAX_CONCURRENT, collect
+
+    words = [word.strip() for word in (args.stopwords or "").split(",") if word.strip()]
+    report = asyncio.run(
+        collect(
+            args.urls,
+            name=args.service,
+            region=args.engine,
+            stopwords=words,
+            concurrency=args.concurrency or MAX_CONCURRENT,
+            timeout=args.timeout,
+            poll_interval=args.poll_interval,
+        )
+    )
+    if args.json:
+        print(json.dumps(report, ensure_ascii=False))
+        return 0 if report["ok"] else 1
+    for document in report["urls"]:
+        state = f"{len(document.get('queries') or [])} phrases" if document.get("ok") else document.get("error")
+        print(f"{document['url']} — {state}")
+    print(f"phrases in the summary: {len(report['summary'])}; waited {report['requests_waited_s']} s", file=sys.stderr)
+    return 0 if report["ok"] else 1
 
 
 def _doctor() -> int:

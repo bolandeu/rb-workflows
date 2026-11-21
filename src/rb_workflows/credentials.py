@@ -13,6 +13,7 @@ from __future__ import annotations
 import contextlib
 import importlib
 import os
+import subprocess
 
 __all__ = ["binding", "in_windmill"]
 
@@ -48,6 +49,18 @@ def _from_ninerouter(service: str, key: str | None) -> tuple[str | None, str | N
     return chosen.reveal(), chosen.proxy
 
 
+def _from_token_cli(service: str) -> tuple[str | None, str | None]:
+    """The generic token store of this machine: `token get <service>` (keychain, Doppler as the fallback)."""
+    try:
+        found = subprocess.run(  # noqa: S603 — the CLI of this very machine, found on PATH
+            ["token", "get", service], capture_output=True, text=True, check=False, timeout=20
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None, None
+    value = found.stdout.strip() if found.returncode == 0 else ""
+    return (value or None), None
+
+
 def _from_store(service: str) -> tuple[str | None, str | None]:
     from rb_credentials import Store
 
@@ -67,4 +80,6 @@ def binding(service: str, *, key: str | None = None, proxy: str | None = None) -
             api_key, found_proxy = _from_store(service)
     else:
         api_key, found_proxy = _from_store(service)
+    if api_key is None:  # the package's own store said nothing: ask the machine-wide token store
+        api_key, found_proxy = _from_token_cli(service)
     return api_key, proxy or found_proxy

@@ -45,6 +45,28 @@ wf run web-fetch --urls https://example.com --steps exa --proxy socks5://u:p@h:1
 
 Результат шага чекпоинтится в Windmill, поэтому документ — всегда JSON и текст усечён до 200 000 символов.
 
+## `semantics` — ключевые фразы по URL
+
+Обёртка над внешними сервисами, которые собирают семантику по URL. Первый сервис — Arsenkin TOOLS
+(`tools_name=semantics`, `mode=url`, регионы `msk` — Яндекс Москва и `gru` — Google Москва).
+
+```bash
+wf semantics --urls https://site.ru/page --json
+wf semantics --urls https://site.ru/a https://site.ru/b --stopwords "купить,цена" --json
+wf semantics --urls https://site.ru/page --engine gru --service arsenkin --json
+```
+
+Задача в Arsenkin асинхронная: `set` → `task_id`, опрос `check`, затем `get`. Лимиты аккаунта, которые обёртка
+держит сама: не больше 5 задач одновременно (`--concurrency`) и 30 запросов в минуту на все статусы. Пачка не ждёт
+первый URL: до пяти задач идут параллельно, упавшая страница не останавливает остальные.
+
+Ответ: по каждому URL — свой список фраз с позицией и флагами (`ws`, `ws_absent` — «[!WS]», `toponym`, `question`),
+плюс `summary` по всем URL: фраза, число URL, где она встретилась, и позиция в каждом. Фраза без позиции остаётся в
+сводной с `position: null`.
+
+**Ещё сервис** — это `src/rb_workflows/services/<name>.py` с `async def collect(...)` плюс строка в `SERVICES`.
+Обёртка, CLI и формат отчёта не меняются.
+
 ## Ключи и прокси
 
 `credentials.binding(service)` выбирает бэкенд по месту запуска, а не по воркфлоу:
