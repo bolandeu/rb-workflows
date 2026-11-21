@@ -172,6 +172,16 @@ wf wordstat --input wordstat.json --source arsenkin --json
 `exact` → `exact-ord` (`[!фраза]`). Чего наш CLI не умеет, говорится до платного вызова: `device` кроме всех устройств
 и больше одного региона (Arsenkin берёт до 4). Регион `0` (вся страна) спрашивается как `225`.
 
+## Кэш ответов Arsenkin
+
+Ответ их задачи (`get`) сохраняется как есть и читается повторно бесплатно: ключ — инструмент и тело запроса,
+значение — их payload. `--cache` берёт сохранённый ответ, `--max-age 7d` отказывает слишком старому.
+
+- `WORKFLOWS_DATABASE_URL` задан → таблица `public.workflows_answers` в общей PostgreSQL (создаётся сама);
+- не задан → локальный SQLite `~/Library/Caches/rb-workflows/answers.sqlite`.
+
+Работает для `top`, `clustering`, `wordstat` при `--source arsenkin`.
+
 ## Ключи и прокси
 
 `credentials.binding(service)` выбирает бэкенд по месту запуска, а не по воркфлоу:

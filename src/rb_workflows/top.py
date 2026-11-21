@@ -35,6 +35,7 @@ from pathlib import Path
 
 import httpx
 
+from . import cache as cache_store
 from . import serp as serp_source
 from . import tasks
 from .credentials import binding
@@ -196,8 +197,13 @@ async def collect(
     started = time.monotonic()
     skipped: list[int] = []
     task_id = None
+    cached = False
     if source == "arsenkin":
-        answer = await _from_arsenkin(data, token=token, poll_interval=poll_interval, timeout=timeout)
+        answer = cache_store.load("top", data, max_age=max_age) if cache else None
+        cached = answer is not None
+        if answer is None:
+            answer = await _from_arsenkin(data, token=token, poll_interval=poll_interval, timeout=timeout)
+            cache_store.save("top", data, answer)
         result = answer.get("result") or {}
         task_id = answer.get("task_id")
         collect_rows = _truncate(result.get("result", {}).get("collect") or _empty(data), data["depth"])
@@ -208,6 +214,8 @@ async def collect(
         collect_rows = _truncate(collect_rows, data["depth"])
     report = build_report(request=data, source=source, collect=collect_rows, top_n=top_n, task_id=task_id)
     report["skipped"] = skipped
+    if cached:
+        report["cached"] = True
     report["elapsed_s"] = round(time.monotonic() - started, 1)
     return report
 

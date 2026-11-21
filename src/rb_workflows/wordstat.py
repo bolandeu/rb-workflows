@@ -34,6 +34,7 @@ from pathlib import Path
 
 import httpx
 
+from . import cache as cache_store
 from . import tasks
 from .credentials import binding
 from .services import arsenkin
@@ -385,7 +386,15 @@ async def collect(
         raise ValueError(f"unknown source '{source}'; known: {', '.join(SOURCES)}")
     data = normalise(request)
     if source == "arsenkin":
-        return await _from_arsenkin(data, token=token, poll_interval=poll_interval, timeout=timeout)
+        payload = cache_store.load(TOOLS_NAME, data, max_age=max_age) if cache else None
+        cached = payload is not None
+        if payload is None:
+            payload = await _payload_from_arsenkin(data, token=token, poll_interval=poll_interval, timeout=timeout)
+            cache_store.save(TOOLS_NAME, data, payload)
+        report = report_from_remote(payload, data)
+        if cached:
+            report["cached"] = True
+        return report
     _need_device(data)
     started = time.monotonic()
     if data["type"] == 1:
@@ -400,14 +409,13 @@ async def collect(
     return report
 
 
-async def _from_arsenkin(data: Mapping, *, token: str | None, poll_interval: float, timeout: float) -> dict:
+async def _payload_from_arsenkin(data: Mapping, *, token: str | None, poll_interval: float, timeout: float) -> dict:
     secret = token or binding("arsenkin")[0]
     if not secret:
         raise RuntimeError("no token for 'arsenkin': `token set arsenkin`")
     body = {key: (value if key != "device" else (value or "")) for key, value in _echo(data).items()}
     async with httpx.AsyncClient(timeout=60.0, trust_env=False) as client:
-        payload = await arsenkin.collect_wordstat(client, secret, body, poll_interval=poll_interval, timeout=timeout)
-    return report_from_remote(payload, data)
+        return await arsenkin.collect_wordstat(client, secret, body, poll_interval=poll_interval, timeout=timeout)
 
 
 def _echo(data: Mapping) -> dict:

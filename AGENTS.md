@@ -69,6 +69,12 @@ Arsenkin `wordstat`: `type` 1 — частоты (`queries`, `regions` до 4, `
 `create/get/save/cancel`, асинхронный: FastAPI/MCP подменит реализацию, остальное не меняется. Отмена локальной задачи
 шлёт SIGTERM воркеру, а отменённая задача не перезаписывается поздним результатом.
 
+## `wf` и кэш Arsenkin
+
+`cache.py` хранит payload задачи Arsenkin: ключ — sha256 от `{"kind", "request"}`, таблица
+`public.workflows_answers` при `WORKFLOWS_DATABASE_URL`, иначе SQLite в кэше пользователя. `top`/`clustering`/
+`wordstat` с `--source arsenkin --cache` читают оттуда, `--max-age` ограничивает возраст. Сбой кэша — промах, не ошибка.
+
 ## Ключи
 
 `credentials.binding(service)` выбирает бэкенд по месту запуска: Windmill-ресурс (`WM_TOKEN`) → 9router

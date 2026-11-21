@@ -31,6 +31,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from . import cache as cache_store
 from . import serp as serp_source
 from . import tasks
 from .credentials import binding
@@ -546,7 +547,16 @@ async def collect(
     data = normalise(request)
     started = time.monotonic()
     if source == "arsenkin":
-        return await _from_arsenkin(data, token=token, poll_interval=poll_interval, timeout=timeout)
+        payload = cache_store.load(TOOLS_NAME, data, max_age=max_age) if cache else None
+        cached = payload is not None
+        if payload is None:
+            payload = await _payload_from_arsenkin(data, token=token, poll_interval=poll_interval, timeout=timeout)
+            cache_store.save(TOOLS_NAME, data, payload)
+        report = report_from_remote(payload, data)
+        if cached:
+            report["cached"] = True
+        report["elapsed_s"] = round(time.monotonic() - started, 1)
+        return report
     tops, raw, skipped = await _from_serp(
         data, concurrency=concurrency, provider=provider, cache=cache, max_age=max_age
     )
@@ -561,16 +571,15 @@ async def collect(
     return report
 
 
-async def _from_arsenkin(data: Mapping, *, token: str | None, poll_interval: float, timeout: float) -> dict:
-    """Their own `clustering` task: `set` → `check` → `get`, the answer read by `report_from_remote`."""
+async def _payload_from_arsenkin(data: Mapping, *, token: str | None, poll_interval: float, timeout: float) -> dict:
+    """Their own `clustering` task: `set` → `check` → `get`; the payload itself is cached and read by the report."""
     secret = token or binding("arsenkin")[0]
     if not secret:
         raise RuntimeError("no token for 'arsenkin': `token set arsenkin`")
     async with httpx.AsyncClient(timeout=60.0, trust_env=False) as client:
-        payload = await arsenkin.collect_clustering(
+        return await arsenkin.collect_clustering(
             client, secret, _echo(data), poll_interval=poll_interval, timeout=timeout
         )
-    return report_from_remote(payload, data)
 
 
 # --- a task that outlives the call -----------------------------------------------------------------------------
