@@ -67,6 +67,28 @@ wf semantics --urls https://site.ru/page --engine gru --service arsenkin --json
 **Ещё сервис** — это `src/rb_workflows/services/<name>.py` с `async def collect(...)` плюс строка в `SERVICES`.
 Обёртка, CLI и формат отчёта не меняются.
 
+## `serp` — позиции по пачке запросов и сила кластера
+
+Обёртка над CLI `serp`: любое число запросов, каждый — свой вызов `serp search`, параллельно до `--concurrency`.
+Параметры CLI пробрасываются как есть.
+
+```bash
+wf serp --queries "купить диван" "доставка воды офис" --engine both --top 20 --json
+wf serp --queries "seo" --provider xmlriver,xmlstock --cache --max-age 7d --yandex-lr 213 --json
+```
+
+Ответ: `results[]` — по записи на (запрос × ПС) с позициями, `sources[]` и стоимость как отдал `serp`, и `summary` —
+топ-10 URL по силе кластера:
+
+```
+strength(url) = Σ (top - позиция + 1) / top  по всем попаданиям
+                ─────────────────────────────
+                число запросов × число ПС
+```
+
+1.0 — первый в каждой ПС по каждому запросу. В строке сводки: `queries_count` (в скольких запросах встречается),
+`appearances` (всего попаданий), `best_position`, `by_query` (позиция в каждой ПС по каждому запросу, `null` если нет).
+
 ## Ключи и прокси
 
 `credentials.binding(service)` выбирает бэкенд по месту запуска, а не по воркфлоу:

@@ -59,6 +59,19 @@ def _parser() -> argparse.ArgumentParser:
     sem.add_argument("--timeout", type=float, default=1800.0, help="seconds a single task may take")
     sem.add_argument("--poll-interval", type=float, default=15.0, help="seconds between status checks")
     sem.add_argument("--json", action="store_true", help="the report as JSON (the contract)")
+    serp_cmd = sub.add_parser(
+        "serp", help="positions in Yandex/Google for a batch of queries, plus the cluster summary"
+    )
+    serp_cmd.add_argument("--queries", nargs="+", required=True, help="any number of queries; each is one serp call")
+    serp_cmd.add_argument("--engine", default="both", choices=("yandex", "google", "both"), help="search engine(s)")
+    serp_cmd.add_argument("--top", type=int, default=20, help="results per query (10..100)")
+    serp_cmd.add_argument("--concurrency", type=int, default=3, help="queries in flight at once")
+    serp_cmd.add_argument("--provider", help="provider queue of serp: xmlriver,xmlstock")
+    serp_cmd.add_argument("--cache", action="store_true", help="take the answer from the serp journal when possible")
+    serp_cmd.add_argument("--max-age", help="with --cache: the oldest journal answer to accept, e.g. 7d")
+    serp_cmd.add_argument("--yandex-lr", type=int, help="Yandex region code (lr)")
+    serp_cmd.add_argument("--google-loc", help="Google location criteria id")
+    serp_cmd.add_argument("--json", action="store_true", help="the report as JSON (the contract)")
     go = sub.add_parser("run", help="run one workflow")
     go.add_argument("workflow", choices=sorted(WORKFLOWS))
     go.add_argument("--input", help='JSON object with the workflow input, e.g. {"urls": ["https://example.com"]}')
@@ -75,6 +88,7 @@ BARE_HELP = """Usage: wf COMMAND
 Commands:
   run       run one workflow
   semantics  a keyword set for one URL or a batch, from an external service
+  serp       positions in Yandex/Google for a batch of queries, plus the cluster summary
   doctor    readiness of this machine: keys, proxies, the workflow engine
   auth      credentials of the services
   describe  this contract
@@ -136,6 +150,22 @@ DESCRIBE = {
                 ],
             },
             {
+                "name": "serp",
+                "description": "positions in Yandex/Google for a batch of queries, plus the cluster summary",
+                "options": [
+                    _param("--queries", "str", multiple=True),
+                    _param("--engine", "choice", "both"),
+                    _param("--top", "int", 20),
+                    _param("--concurrency", "int", 3),
+                    _param("--provider", "str"),
+                    _param("--cache", "boolean", False),
+                    _param("--max-age", "str"),
+                    _param("--yandex-lr", "int"),
+                    _param("--google-loc", "str"),
+                    _JSON_OPTION,
+                ],
+            },
+            {
                 "name": "doctor",
                 "description": "readiness of this machine: keys, proxies, the workflow engine",
                 "options": [_JSON_OPTION],
@@ -177,6 +207,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "semantics":
         return _semantics(args)
+    if args.command == "serp":
+        return _serp(args)
     if args.command == "doctor":
         return _doctor()
     if args.command == "auth":
@@ -206,6 +238,33 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())
+
+
+def _serp(args: argparse.Namespace) -> int:
+    from . import serp as serp_source
+
+    report = asyncio.run(
+        serp_source.collect(
+            args.queries,
+            engine=args.engine,
+            top=args.top,
+            concurrency=args.concurrency,
+            provider=args.provider,
+            cache=args.cache,
+            max_age=args.max_age,
+            yandex_lr=args.yandex_lr,
+            google_loc=args.google_loc,
+        )
+    )
+    if args.json:
+        print(json.dumps(report, ensure_ascii=False))
+        return 0 if report["ok"] else 1
+    for entry in report["results"]:
+        state = f"{len(entry['rows'])} rows" if entry["ok"] else entry["error"]
+        print(f"{entry['query']} [{entry['serp_engine']}] — {state}")
+    for row in report["summary"]["top"]:
+        print(f"{row['strength']:.3f}  {row['url']}  (best {row['best_position']}, queries {row['queries_count']})")
+    return 0 if report["ok"] else 1
 
 
 def _semantics(args: argparse.Namespace) -> int:

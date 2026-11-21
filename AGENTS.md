@@ -25,6 +25,12 @@
 в минуту), пачку и сводку. Сервис — модуль `services/<name>.py` с `async def collect(...)` и строка в `SERVICES`;
 новый сервис не трогает обёртку, CLI и форму отчёта. Первый — Arsenkin: `set` → `check` → `get`, `mode=url`.
 
+## `wf serp`
+
+Пачка запросов в `serp search` параллельно (`--concurrency`), все параметры CLI наружу. `summary` считает силу URL:
+`Σ (top - pos + 1)/top` по попаданиям, делённое на число запросов × ПС; топ-10. Упавший запрос — запись с
+`ok: false`, пачка продолжается. Python: `await rb_workflows.serp.collect(...)`.
+
 ## Ключи
 
 `credentials.binding(service)` выбирает бэкенд по месту запуска: Windmill-ресурс (`WM_TOKEN`) → 9router
