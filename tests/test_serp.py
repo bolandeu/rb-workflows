@@ -37,6 +37,7 @@ def _envelope(query: str, rows: list[tuple[int, str, str, str]], *, engine: str 
         "cost_currency": "RUB",
     }
 
+
 def _fake_serp(
     answers: dict[str, dict], calls: list[list[str]] | None = None
 ) -> Callable[..., subprocess.CompletedProcess]:
@@ -59,6 +60,7 @@ def _fake_serp(
 
     return run
 
+
 async def test_one_query_one_engine_gives_one_entry_and_the_leader_is_strength_one(monkeypatch) -> None:
     answers = {"seo": _envelope("seo", [(1, "https://a.ru/x", "a.ru", "A"), (2, "https://b.ru/y", "b.ru", "B")])}
     monkeypatch.setattr(serp_source.subprocess, "run", _fake_serp(answers))
@@ -71,6 +73,7 @@ async def test_one_query_one_engine_gives_one_entry_and_the_leader_is_strength_o
     assert [row["position"] for row in report["results"][0]["rows"]] == [1, 2]
     leader = report["summary"]["top"][0]
     assert (leader["url"], leader["strength"], leader["best_position"]) == ("https://a.ru/x", 1.0, 1)
+
 
 async def test_both_engines_give_two_entries_per_query_and_count_each_position(monkeypatch) -> None:
     rows = [
@@ -107,6 +110,7 @@ async def test_both_engines_give_two_entries_per_query_and_count_each_position(m
     assert (url["appearances"], url["queries_count"], url["best_position"]) == (2, 1, 1)
     assert url["by_query"] == [{"query": "seo", "yandex": 1, "google": 5}]
 
+
 async def test_the_batch_runs_in_parallel_and_never_more_than_the_limit(monkeypatch) -> None:
     running = {"now": 0, "peak": 0}
 
@@ -123,6 +127,7 @@ async def test_the_batch_runs_in_parallel_and_never_more_than_the_limit(monkeypa
     assert running["peak"] <= 2  # the limit is respected
     assert report["ok"] is True
 
+
 async def test_a_failed_query_is_reported_and_the_others_still_count(monkeypatch) -> None:
     answers = {"good": _envelope("good", [(1, "https://a.ru/x", "a.ru", "A")])}
     monkeypatch.setattr(serp_source.subprocess, "run", _fake_serp(answers))
@@ -133,6 +138,7 @@ async def test_a_failed_query_is_reported_and_the_others_still_count(monkeypatch
     assert "PROVIDER_ERROR" in failed["error"]
     assert report["ok"] is False
     assert [row["url"] for row in report["summary"]["top"]] == ["https://a.ru/x"]
+
 
 async def test_strength_is_normalised_over_queries_and_engines(monkeypatch) -> None:
     # `both` URLs: the first is 1st in Yandex and 1st in Google for one query; the second is 10th in Yandex only.
@@ -178,6 +184,7 @@ async def test_strength_is_normalised_over_queries_and_engines(monkeypatch) -> N
     assert by_url["https://b.ru/2"]["strength"] == pytest.approx(0.05)  # (10-10+1)/10 over 1 query x 2 engines
     assert [row["url"] for row in report["summary"]["top"]] == ["https://a.ru/1", "https://b.ru/2"]
 
+
 async def test_the_summary_keeps_ten_urls_and_orders_by_strength_then_breadth(monkeypatch) -> None:
     rows = [
         {
@@ -206,6 +213,7 @@ async def test_the_summary_keeps_ten_urls_and_orders_by_strength_then_breadth(mo
     assert [row["best_position"] for row in top] == list(range(1, 11))
     assert report["summary"]["urls_total"] == 14
 
+
 async def test_every_parameter_reaches_the_serp_cli(monkeypatch) -> None:
     calls: list[list[str]] = []
     monkeypatch.setattr(serp_source.subprocess, "run", _fake_serp({"seo": _envelope("seo", [])}, calls))
@@ -231,6 +239,7 @@ async def test_every_parameter_reaches_the_serp_cli(monkeypatch) -> None:
     assert argv[argv.index("--google-loc") : argv.index("--google-loc") + 2] == ["--google-loc", "1011963"]
     assert argv[-1] == "--json"
 
+
 async def test_a_non_json_answer_is_an_entry_error_not_a_traceback(monkeypatch) -> None:
     monkeypatch.setattr(
         serp_source.subprocess,
@@ -240,6 +249,7 @@ async def test_a_non_json_answer_is_an_entry_error_not_a_traceback(monkeypatch) 
     report = await serp_source.collect(["seo"], engine="yandex")
     assert report["results"][0]["ok"] is False
     assert "not JSON" in report["results"][0]["error"]
+
 
 async def test_a_missing_serp_binary_is_an_entry_error(monkeypatch) -> None:
     def run(argv, **kwargs):
