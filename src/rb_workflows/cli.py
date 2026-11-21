@@ -320,8 +320,10 @@ def _top(args: argparse.Namespace) -> int:
     from . import top as top_source
 
     tasks_dir = Path(args.tasks_dir) if args.tasks_dir else None
-    if args.run:
-        top_source.run_task(args.run, tasks_dir=tasks_dir)
+    if args.run:  # the worker of a submitted `top` job goes through the shared runner
+        from . import tasks as tasks_module
+
+        tasks_module.run_task(args.run, tasks_dir)
         return 0
     if args.task:
         answer = asyncio.run(
