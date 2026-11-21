@@ -47,14 +47,16 @@ async def _post(client: httpx.AsyncClient, token: str, path: str, body: dict) ->
 
     Returns the parsed JSON body of a successful call.
     """
-    for attempt in range(RATE_LIMIT_TRIES):
+    attempt = 0
+    while True:
         try:
             response = await client.post(f"{BASE}/{path}", json=body, headers={"Authorization": f"Bearer {token}"})
         except httpx.HTTPError as exc:  # the transport is the service's failure too, not the caller's
             raise ArsenkinError(f"{type(exc).__name__} while calling /{path}: {exc}") from exc
         if response.status_code != 429:
             break
-        if attempt == RATE_LIMIT_TRIES - 1:
+        attempt += 1
+        if attempt >= RATE_LIMIT_TRIES:
             raise ArsenkinError("rate limited (HTTP 429): the account allows 30 requests a minute")
         await asyncio.sleep(RATE_LIMIT_PAUSE)
     if response.status_code >= 400:
@@ -68,9 +70,9 @@ async def _post(client: httpx.AsyncClient, token: str, path: str, body: dict) ->
     return payload
 
 
-async def set_task(client: httpx.AsyncClient, token: str, data: dict) -> int:
-    """Place a `check-top` task and return its id (the service's own id, which outlives this process)."""
-    body = _top_body(data)
+async def set_task(client: httpx.AsyncClient, token: str, data: dict, *, tools_name: str = "check-top") -> int:
+    """Place one task of the named tool and return its id (the service's own id, which outlives this process)."""
+    body = _top_body(data) if tools_name == "check-top" else {"tools_name": tools_name, "data": dict(data)}
     started = await _post(client, token, "set", body)
     task_id = started.get("task_id")
     if task_id is None:
@@ -122,7 +124,37 @@ async def collect_top(
     service sends it — `{"result": {"request": …, "result": {"collect": …}}, "task_id": …}` — so the caller decides what
     to keep. Raises `ArsenkinError` for every refusal, as `collect` does.
     """
-    started = await _post(client, token, "set", _top_body(data))
+    return await _collect_task(client, token, _top_body(data), poll_interval=poll_interval, timeout=timeout)
+
+
+async def collect_clustering(
+    client: httpx.AsyncClient,
+    token: str,
+    data: dict,
+    *,
+    poll_interval: float = 15.0,
+    timeout: float = 3600.0,
+) -> dict:
+    """Their `clustering` task: the documented `data` object in, the service's own answer out."""
+    return await _collect_task(
+        client,
+        token,
+        {"tools_name": "clustering", "data": dict(data)},
+        poll_interval=poll_interval,
+        timeout=timeout,
+    )
+
+
+async def _collect_task(
+    client: httpx.AsyncClient,
+    token: str,
+    body: dict,
+    *,
+    poll_interval: float,
+    timeout: float,
+) -> dict:
+    """The `set` → `check` → `get` dance any tool of theirs shares; returns their `get` answer."""
+    started = await _post(client, token, "set", body)
     task_id = started.get("task_id")
     if task_id is None:
         raise ArsenkinError(f"no task_id in the answer: {started}")

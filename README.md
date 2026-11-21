@@ -117,6 +117,34 @@ wf top --input top.json --source arsenkin --json      # их задача check-
 
 Движок, который источник не умеет (YouTube, коды 20/21), — не ошибка: список пуст, а его индекс назван в `skipped`.
 
+## `clustering` — кластеры запросов, из двух источников
+
+Вход и выход — Arsenkin `clustering`, поэтому задание, написанное под их API, работает здесь без правок. Источник —
+свой стек (`serp` + `wordstat`, по умолчанию) или сам Arsenkin.
+
+```bash
+wf clustering --queries "ремонт киа" "сервис киа" --se 1 --region 213 --json
+wf clustering --queries "q" --se 1 --region 213 --group hard --count 3 --ws base,exact --json
+wf clustering --input clustering.json --stoplist auto.ru,yandex.ru --main --json
+wf clustering --input clustering.json --source arsenkin --json
+```
+
+```json
+{"tools_name": "clustering",
+ "data": {"queries": ["ремонт киа", "сервис киа"], "se": 1, "region": 213, "group": "soft", "count": 3,
+          "depth": 10, "stoplist": ["auto.ru"], "ws": ["base", "exact"], "main": true}}
+```
+
+Свой источник: топы по каждой фразе через `serp search`, группировка по пересечению URL — `hard` склеивает фразы с
+не меньше `count` общими URL, `soft` — с хотя бы одним; `stoplist` выкидывает домены, `main` — главные страницы.
+Частоты берутся у `wordstat search` одним вызовом и только для типов из `ws` (`base` → `broad`, `quoted` → `phrase`,
+`exact` → `exact`, `overal` = `base`).
+
+Ответ: `result.request` — эхо входа, `result.result` — кластеры в их именах полей: `clustered` (имя кластера — сильнейшая
+фраза), `words`, `wssumm` (сумма частот), `topurl` (URL-лидер), `main` (сколько главных страниц в его топах),
+`queries` (по фразе: `ws`, `ws_strict`, `ws_types`). `agregators` и `geo` у своего источника `null`: для них нужны их
+списки. `summary` — число кластеров, фраз и `skipped` — запросы, которые источник не ответил.
+
 ## Ключи и прокси
 
 `credentials.binding(service)` выбирает бэкенд по месту запуска, а не по воркфлоу:

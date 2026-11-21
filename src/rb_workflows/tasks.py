@@ -254,8 +254,9 @@ class ArsenkinStore:
         data = request.get("request") or request
 
         async def place() -> int:
+            tools_name = "check-top" if kind == "top" else kind
             async with self._client() as client:
-                return await arsenkin.set_task(client, self._secret(), dict(data))
+                return await arsenkin.set_task(client, self._secret(), dict(data), tools_name=tools_name)
 
         remote = await place()
         task_id = new_id(kind, store="arsenkin").rsplit(":", 1)[0] + f":{remote}"

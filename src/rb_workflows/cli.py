@@ -10,6 +10,7 @@ import asyncio
 import json
 import os
 import sys
+from pathlib import Path
 from typing import NoReturn
 
 from .flows.web_fetch import web_fetch
@@ -107,6 +108,42 @@ def _parser() -> argparse.ArgumentParser:
         "--poll-interval", type=float, default=15.0, help="seconds between status checks (source=arsenkin)"
     )
     top_cmd.add_argument("--json", action="store_true", help="the report as JSON (the contract)")
+    cluster = sub.add_parser(
+        "clustering", help="keywords grouped by the URLs they share, in Arsenkin's clustering shape"
+    )
+    cluster.add_argument(
+        "--input",
+        help="JSON file with the clustering body (or the bare data). Required keys: queries, se, region; optional: "
+        "group (soft), count (3), depth (10), stoplist ([]), ws ([]), main (false). Flags below build the same body",
+    )
+    cluster.add_argument("--queries", nargs="+", help="phrases to group (instead of --input)")
+    cluster.add_argument("--se", type=int, choices=(1, 2), help="1 Yandex, 2 Google")
+    cluster.add_argument("--region", help="Yandex region code (213) or Google location id (1011969)")
+    cluster.add_argument("--group", choices=("hard", "soft"), help="how strictly phrases are merged (default: soft)")
+    cluster.add_argument("--count", type=int, help="degree of grouping, 2..10 (default: 3)")
+    cluster.add_argument("--depth", type=int, help="results per query: 10, 20 or 30 (default: 10)")
+    cluster.add_argument("--stoplist", help="comma-separated domains to drop, e.g. auto.ru,yandex.ru")
+    cluster.add_argument("--ws", help="frequencies to collect: base, quoted, overal, exact")
+    cluster.add_argument("--main", action="store_true", help="drop the main pages of the sites")
+    cluster.add_argument("--source", default="serp", choices=("serp", "arsenkin"), help="who answers (default: serp)")
+    cluster.add_argument("--provider", help="with --source serp: the serp provider queue, e.g. xmlriver,xmlstock")
+    cluster.add_argument(
+        "--cache", action="store_true", help="with --source serp: take the serp answer from the journal"
+    )
+    cluster.add_argument("--max-age", help="with --cache: the oldest serp answer to accept, e.g. 7d")
+    cluster.add_argument("--concurrency", type=int, default=3, help="queries in flight at once (source=serp)")
+    cluster.add_argument(
+        "--timeout", type=float, default=3600.0, help="seconds the whole task may take (source=arsenkin)"
+    )
+    cluster.add_argument(
+        "--poll-interval", type=float, default=15.0, help="seconds between status checks (source=arsenkin)"
+    )
+    cluster.add_argument("--submit", action="store_true", help="place the task and answer with its id at once")
+    cluster.add_argument("--task", metavar="ID", help="read a submitted task: its state, or the report when it is done")
+    cluster.add_argument("--wait", action="store_true", help="with --task: block until the task finishes")
+    cluster.add_argument("--run", metavar="ID", help=argparse.SUPPRESS)  # the detached worker of --submit
+    cluster.add_argument("--tasks-dir", help="where the task files live (default: the user state dir)")
+    cluster.add_argument("--json", action="store_true", help="the report as JSON (the contract)")
     go = sub.add_parser("run", help="run one workflow")
     go.add_argument("workflow", choices=sorted(WORKFLOWS))
     go.add_argument("--input", help='JSON object with the workflow input, e.g. {"urls": ["https://example.com"]}')
@@ -124,6 +161,7 @@ Commands:
   run       run one workflow
   semantics  a keyword set for one URL or a batch, from an external service
   top        positions in Arsenkin's check-top shape, from our serp or from Arsenkin
+  clustering keywords grouped by the URLs they share, in Arsenkin's clustering shape
   task       a submitted job: its state, or the report once it is done
   doctor    readiness of this machine: keys, proxies, the workflow engine
   auth      credentials of the services
@@ -223,6 +261,32 @@ DESCRIBE = {
                 ],
             },
             {
+                "name": "clustering",
+                "description": "keywords grouped by the URLs they share, in Arsenkin's clustering shape. Input required: "
+                "queries, se (1 Yandex, 2 Google), region; optional: group (soft), count (3), depth (10), "
+                "stoplist ([]), ws ([]), main (false) — as a JSON file or as flags",
+                "options": [
+                    _param("--input", "path"),
+                    _param("--queries", "str", multiple=True),
+                    _param("--se", "int", 1),
+                    _param("--region", "str"),
+                    _param("--group", "choice", "soft"),
+                    _param("--count", "int", 3),
+                    _param("--depth", "int", 10),
+                    _param("--stoplist", "str"),
+                    _param("--ws", "str"),
+                    _param("--main", "boolean", False),
+                    _param("--source", "choice", "serp"),
+                    _param("--provider", "str"),
+                    _param("--cache", "boolean", False),
+                    _param("--max-age", "str"),
+                    _param("--concurrency", "int", 3),
+                    _param("--timeout", "float", 3600.0),
+                    _param("--poll-interval", "float", 15.0),
+                    _JSON_OPTION,
+                ],
+            },
+            {
                 "name": "doctor",
                 "description": "readiness of this machine: keys, proxies, the workflow engine",
                 "options": [_JSON_OPTION],
@@ -266,6 +330,8 @@ def main(argv: list[str] | None = None) -> int:
         return _semantics(args)
     if args.command == "top":
         return _top(args)
+    if args.command == "clustering":
+        return _clustering(args)
     if args.command == "task":
         return _tasks(args)
     if args.command == "doctor":
@@ -295,6 +361,20 @@ def main(argv: list[str] | None = None) -> int:
     return 0 if result["ok"] else 1
 
 
+def _read_json(path: Path) -> dict:
+    """A request file; a missing or broken one is the caller's mistake, said as the Standard's envelope."""
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        print(
+            json.dumps(
+                {"ok": False, "error": {"code": "INVALID_ARGUMENTS", "message": f"{path}: {exc}"}},
+                ensure_ascii=False,
+            )
+        )
+        raise SystemExit(2) from None
+
+
 def _check_top_body(args: argparse.Namespace) -> dict:
     """`--queries … --se 1:213,11:1011969 --depth 10` → the check-top body Arsenkin documents."""
     se = []
@@ -322,9 +402,93 @@ def _check_top_body(args: argparse.Namespace) -> dict:
     }
 
 
+def _clustering_body(args: argparse.Namespace) -> dict:
+    """`--queries … --se 1 --region 213 --group soft --count 3` → the clustering body Arsenkin documents."""
+    body: dict = {"queries": list(args.queries), "se": args.se, "region": args.region}
+    for key in ("group", "count", "depth"):
+        if getattr(args, key) is not None:
+            body[key] = getattr(args, key)
+    if args.stoplist:
+        body["stoplist"] = [entry.strip() for entry in args.stoplist.split(",") if entry.strip()]
+    if args.ws:
+        body["ws"] = [entry.strip() for entry in args.ws.split(",") if entry.strip()]
+    if args.main:
+        body["main"] = True
+    return body
+
+
+def _clustering(args: argparse.Namespace) -> int:
+    from pathlib import Path
+
+    from . import clustering as clustering_source
+
+    tasks_dir = Path(args.tasks_dir) if args.tasks_dir else None
+    if args.run:  # the worker of a submitted `clustering` job goes through the shared runner
+        from . import tasks as tasks_module
+
+        tasks_module.run_task(args.run, tasks_dir)
+        return 0
+    if args.task:
+        answer = asyncio.run(
+            clustering_source.wait(args.task, tasks_dir=tasks_dir)
+            if args.wait
+            else clustering_source.poll(args.task, tasks_dir=tasks_dir)
+        )
+        if args.json:
+            print(json.dumps(answer, ensure_ascii=False))
+        else:
+            print(f"{args.task}: {answer.get('state')}")
+        return 0 if answer.get("ok") and answer.get("state") != "error" else 1
+    if args.input:
+        request = _read_json(Path(args.input))
+    elif args.queries and args.se and args.region:
+        request = _clustering_body(args)
+    else:
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "error": {
+                        "code": "INVALID_ARGUMENTS",
+                        "message": "nothing to do: pass --input, or --queries with --se and --region, or --task ID",
+                    },
+                },
+                ensure_ascii=False,
+            )
+        )
+        raise SystemExit(2)
+    if args.submit:
+        answer = asyncio.run(clustering_source.submit(request, source=args.source, tasks_dir=tasks_dir))
+        if args.json:
+            print(json.dumps(answer, ensure_ascii=False))
+        else:
+            print(f"{answer['task_id']}: {answer['state']}; {answer['poll']}")
+        return 0
+    report = asyncio.run(
+        clustering_source.collect(
+            request,
+            source=args.source,
+            concurrency=args.concurrency,
+            provider=args.provider,
+            cache=args.cache,
+            max_age=args.max_age,
+            poll_interval=args.poll_interval,
+            timeout=args.timeout,
+        )
+    )
+    if args.json:
+        print(json.dumps(report, ensure_ascii=False))
+        return 0 if report["ok"] else 1
+    for row in report["result"]["result"]:
+        print(f"{row['clustered']}: {len(row['words'])} words, wssumm {row['wssumm']}, top {row['topurl']}")
+    print(f"clusters: {report['summary']['clusters_total']} of {report['summary']['queries_total']} queries")
+    return 0 if report["ok"] else 1
+
+
 def _tasks(args: argparse.Namespace) -> int:
     from pathlib import Path
 
+    from . import clustering  # noqa: F401 - importing it registers the `clustering` task kind and its report
     from . import tasks as tasks_module
 
     tasks_dir = Path(args.tasks_dir) if args.tasks_dir else None
@@ -390,7 +554,7 @@ def _top(args: argparse.Namespace) -> int:
             print(f"{args.id}: {answer.get('state')}")
         return 0 if answer.get("ok") and answer.get("state") != "error" else 1
     if args.input:
-        request = json.loads(Path(args.input).read_text(encoding="utf-8"))
+        request = _read_json(Path(args.input))
     elif args.queries:
         request = _check_top_body(args)
     else:

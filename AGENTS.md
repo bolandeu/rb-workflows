@@ -36,6 +36,15 @@
 URL в порядке выдачи; `summary.top` — URL по силе. Неподдерживаемый движок (YouTube) даёт пустой список и индекс
 в `skipped`, не ошибку. Arsenkin-статусы: известные «готово»/«провал», всё остальное (`starting`, `process`) — ждём.
 
+## `wf clustering`
+
+Вход — Arsenkin `clustering` (обязательные `queries`, `se` 1/2, `region`; `group` soft, `count` 3, `depth` 10,
+`stoplist` [], `ws` [], `main` false). Источник `--source serp|arsenkin`. `serp` — свой стек: топы через `serp
+search`, группировка по пересечению URL (`hard` — не меньше `count` общих URL, `soft` — хотя бы один), частоты через
+`wordstat search` только для типов из `ws`. Выход в их именах полей: `clustered`, `words`, `wssumm`, `topurl`, `main`,
+`agregators`/`geo` — `null` (нужны ихние списки). `main: true` убирает главные страницы из группировки, но считает их
+в поле `main`. Упавший запрос — в `summary.skipped`, не ошибка всей задачи.
+
 ## `wf task` и слой задач
 
 Медленная работа ставится через `--submit` и читается через `wf task <id> [--wait]`; тип задачи (`kind`) лежит в
