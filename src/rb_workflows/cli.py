@@ -58,7 +58,15 @@ def _parser() -> argparse.ArgumentParser:
     sem.add_argument("--concurrency", type=int, default=None, help="tasks in flight at once (the account allows 5)")
     sem.add_argument("--timeout", type=float, default=1800.0, help="seconds a single task may take")
     sem.add_argument("--poll-interval", type=float, default=15.0, help="seconds between status checks")
+    sem.add_argument("--submit", action="store_true", help="place the job and answer with its id at once")
+    sem.add_argument("--tasks-dir", help="where the task files live (default: the user state dir)")
     sem.add_argument("--json", action="store_true", help="the report as JSON (the contract)")
+    tasks_cmd = sub.add_parser("tasks", help="a submitted job: its state, or the report once it is done")
+    tasks_cmd.add_argument("--task", metavar="ID", help="the job to read")
+    tasks_cmd.add_argument("--wait", action="store_true", help="block until the job finishes")
+    tasks_cmd.add_argument("--run", metavar="ID", help=argparse.SUPPRESS)  # the detached worker of --submit
+    tasks_cmd.add_argument("--tasks-dir", help="where the task files live (default: the user state dir)")
+    tasks_cmd.add_argument("--json", action="store_true", help="the report as JSON (the contract)")
     top_cmd = sub.add_parser("top", help="positions in Arsenkin's check-top shape, from our serp or from Arsenkin")
     top_cmd.add_argument("--input", help="JSON file with the check-top body (or the bare data object)")
     top_cmd.add_argument("--submit", action="store_true", help="place the task and answer with its id at once")
@@ -93,6 +101,7 @@ Commands:
   run       run one workflow
   semantics  a keyword set for one URL or a batch, from an external service
   top        positions in Arsenkin's check-top shape, from our serp or from Arsenkin
+  tasks      a submitted job: its state, or the report once it is done
   doctor    readiness of this machine: keys, proxies, the workflow engine
   auth      credentials of the services
   describe  this contract
@@ -154,6 +163,11 @@ DESCRIBE = {
                 ],
             },
             {
+                "name": "tasks",
+                "description": "a submitted job: its state, or the report once it is done",
+                "options": [_param("--task", "str"), _param("--wait", "boolean", False), _JSON_OPTION],
+            },
+            {
                 "name": "top",
                 "description": "positions in Arsenkin's check-top shape, from our serp or from Arsenkin",
                 "options": [
@@ -165,6 +179,11 @@ DESCRIBE = {
                     _param("--poll-interval", "float", 15.0),
                     _JSON_OPTION,
                 ],
+            },
+            {
+                "name": "tasks",
+                "description": "a submitted job: its state, or the report once it is done",
+                "options": [_param("--task", "str"), _param("--wait", "boolean", False), _JSON_OPTION],
             },
             {
                 "name": "top",
@@ -239,6 +258,8 @@ def main(argv: list[str] | None = None) -> int:
         return _semantics(args)
     if args.command == "top":
         return _top(args)
+    if args.command == "tasks":
+        return _tasks(args)
     if args.command == "doctor":
         return _doctor()
     if args.command == "auth":
@@ -268,6 +289,33 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())
+
+
+def _tasks(args: argparse.Namespace) -> int:
+    from pathlib import Path
+
+    from . import tasks as tasks_module
+
+    tasks_dir = Path(args.tasks_dir) if args.tasks_dir else None
+    if args.run:
+        tasks_module.run_task(args.run, tasks_dir)
+        return 0
+    if not args.task:
+        print(
+            json.dumps(
+                {"ok": False, "error": {"code": "INVALID_ARGUMENTS", "message": "nothing to read: pass --task ID"}},
+                ensure_ascii=False,
+            )
+        )
+        raise SystemExit(2)
+    answer = (
+        tasks_module.wait_local(args.task, tasks_dir) if args.wait else tasks_module.poll_local(args.task, tasks_dir)
+    )
+    if args.json:
+        print(json.dumps(answer, ensure_ascii=False))
+    else:
+        print(f"{args.task}: {answer.get('state')}")
+    return 0 if answer.get("ok") and answer.get("state") != "error" else 1
 
 
 def _top(args: argparse.Namespace) -> int:
@@ -331,6 +379,33 @@ def _top(args: argparse.Namespace) -> int:
     for row in report["summary"]["top"]:
         print(f"{row['strength']:.3f}  {row['url']}  (best {row['best_position']}, queries {row['queries_count']})")
     return 0 if report["ok"] else 1
+
+
+def _tasks(args: argparse.Namespace) -> int:
+    from pathlib import Path
+
+    from . import tasks as tasks_module
+
+    tasks_dir = Path(args.tasks_dir) if args.tasks_dir else None
+    if args.run:
+        tasks_module.run_task(args.run, tasks_dir)
+        return 0
+    if not args.task:
+        print(
+            json.dumps(
+                {"ok": False, "error": {"code": "INVALID_ARGUMENTS", "message": "nothing to read: pass --task ID"}},
+                ensure_ascii=False,
+            )
+        )
+        raise SystemExit(2)
+    answer = (
+        tasks_module.wait_local(args.task, tasks_dir) if args.wait else tasks_module.poll_local(args.task, tasks_dir)
+    )
+    if args.json:
+        print(json.dumps(answer, ensure_ascii=False))
+    else:
+        print(f"{args.task}: {answer.get('state')}")
+    return 0 if answer.get("ok") and answer.get("state") != "error" else 1
 
 
 def _top(args: argparse.Namespace) -> int:
@@ -427,6 +502,26 @@ def _semantics(args: argparse.Namespace) -> int:
     from .semantics import MAX_CONCURRENT, collect
 
     words = [word.strip() for word in (args.stopwords or "").split(",") if word.strip()]
+    if args.submit:
+        from pathlib import Path
+
+        from . import tasks as tasks_module
+
+        answer = tasks_module.submit_local(
+            "semantics",
+            {
+                "urls": list(args.urls),
+                "name": args.service,
+                "region": args.engine,
+                "stopwords": words,
+            },
+            Path(args.tasks_dir) if args.tasks_dir else None,
+        )
+        if args.json:
+            print(json.dumps(answer, ensure_ascii=False))
+        else:
+            print(f"{answer['task_id']}: {answer['state']}; {answer['poll']}")
+        return 0
     report = asyncio.run(
         collect(
             args.urls,

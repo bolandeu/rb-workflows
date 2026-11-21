@@ -20,7 +20,20 @@ from pathlib import Path
 
 import platformdirs
 
-__all__ = ["new_id", "read", "running", "spawn", "state_dir", "update", "write"]
+__all__ = [
+    "KINDS",
+    "new_id",
+    "poll_local",
+    "read",
+    "run_task",
+    "running",
+    "spawn",
+    "state_dir",
+    "submit_local",
+    "update",
+    "wait_local",
+    "write",
+]
 
 APP = "rb-workflows"
 PENDING = frozenset({"submitted", "running", "process", "queue"})
@@ -95,3 +108,70 @@ def spawn(task_id: str, base: Path | None = None) -> int:
         argv, stdout=log, stderr=log, stdin=subprocess.DEVNULL, start_new_session=True
     )
     return process.pid
+
+
+# --- the generic layer ------------------------------------------------------------------------------------------
+# A command says only what to run (`kind`) and with what arguments; where the task lives and who executes it is the
+# store's business. Today the store is a file plus a worker of this CLI; a FastAPI or MCP front end replaces the store
+# and keeps the same three calls: `submit`, `poll`, `wait`.
+
+KINDS: dict[str, str] = {"top": "rb_workflows.top:collect", "semantics": "rb_workflows.semantics:collect"}
+
+
+def _import(target: str):
+    """`"module:function"` → the function, imported late so a missing optional dep of one job cannot break another."""
+    import importlib
+
+    module_name, _, attribute = target.partition(":")
+    return getattr(importlib.import_module(module_name), attribute)
+
+
+def submit_local(kind: str, args: Mapping, base: Path | None = None) -> dict:
+    """Place a job of `kind` that this machine runs; returns the id and how to read it later, at once."""
+    if kind not in KINDS:
+        raise ValueError(f"unknown job '{kind}'; known: {', '.join(sorted(KINDS))}")
+    task_id = new_id()
+    write({"task_id": task_id, "kind": kind, "source": "local", "state": "running", "args": dict(args)}, base)
+    spawn(task_id, base)
+    return {
+        "ok": True,
+        "task_id": task_id,
+        "kind": kind,
+        "state": "running",
+        "poll_after_s": 15,
+        "poll": f"wf tasks --task {task_id} --json",
+    }
+
+
+def poll_local(task_id: str, base: Path | None = None) -> dict:
+    """The stored state of a local job, or its report once it is done."""
+    task = read(task_id, base)
+    if task.get("state") == "done":
+        return {**task["report"], "state": "done", "task_id": task_id}
+    if task.get("state") == "error":
+        return {"ok": False, "state": "error", "task_id": task_id, "error": task.get("error")}
+    return {"ok": True, "task_id": task_id, "kind": task.get("kind"), "state": "running", "retry_after_s": 15}
+
+
+def run_task(task_id: str, base: Path | None = None) -> None:
+    """The worker body: run the job named in the task file and store the report (or the error)."""
+    import asyncio
+
+    task = read(task_id, base)
+    try:
+        job = _import(KINDS[task["kind"]])
+        report = asyncio.run(job(**task["args"]))
+        update(task_id, base, state="done", report=report)
+    except Exception as exc:  # a worker must leave a readable state, not a traceback in a log
+        update(task_id, base, state="error", error=f"{type(exc).__name__}: {exc}"[:400])
+
+
+def wait_local(task_id: str, base: Path | None = None, *, poll_interval: float = 5.0) -> dict:
+    """Poll a local job until it is done or failed."""
+    import time as _time
+
+    while True:
+        answer = poll_local(task_id, base)
+        if answer.get("state") in {"done", "error"}:
+            return answer
+        _time.sleep(poll_interval)
