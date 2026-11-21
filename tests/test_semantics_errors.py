@@ -140,6 +140,7 @@ async def test_an_unexpected_status_keeps_waiting_instead_of_reading_a_result() 
         found = await arsenkin.collect(client, "t", "https://a.example/", poll_interval=0, timeout=1)
     assert found["queries"][0]["phrase"] == "диван"
 
+
 async def test_a_status_nobody_named_times_out_rather_than_passing_as_a_result() -> None:
     routes = {
         "set": {"code": "SET_TASK_OK", "task_id": 9},
@@ -148,6 +149,7 @@ async def test_a_status_nobody_named_times_out_rather_than_passing_as_a_result()
     async with _client(_answers(routes)) as client:
         with pytest.raises(arsenkin.ArsenkinError, match="still 'quantum' after 0 s"):
             await arsenkin.collect(client, "t", "https://a.example/", poll_interval=0, timeout=0)
+
 
 # --- the wrapper: one bad URL never takes the batch down ---------------------------------------
 

@@ -64,8 +64,12 @@ def _parser() -> argparse.ArgumentParser:
     top_cmd.add_argument("--source", default="serp", choices=("serp", "arsenkin"), help="who answers (default: serp)")
     top_cmd.add_argument("--top-n", type=int, default=10, help="rows of the strength summary to show")
     top_cmd.add_argument("--concurrency", type=int, default=3, help="queries in flight at once (source=serp)")
-    top_cmd.add_argument("--timeout", type=float, default=3600.0, help="seconds the whole task may take (source=arsenkin)")
-    top_cmd.add_argument("--poll-interval", type=float, default=15.0, help="seconds between status checks (source=arsenkin)")
+    top_cmd.add_argument(
+        "--timeout", type=float, default=3600.0, help="seconds the whole task may take (source=arsenkin)"
+    )
+    top_cmd.add_argument(
+        "--poll-interval", type=float, default=15.0, help="seconds between status checks (source=arsenkin)"
+    )
     top_cmd.add_argument("--json", action="store_true", help="the report as JSON (the contract)")
     serp_cmd = sub.add_parser(
         "serp", help="positions in Yandex/Google for a batch of queries, plus the cluster summary"
