@@ -61,8 +61,8 @@ def _parser() -> argparse.ArgumentParser:
     sem.add_argument("--submit", action="store_true", help="place the job and answer with its id at once")
     sem.add_argument("--tasks-dir", help="where the task files live (default: the user state dir)")
     sem.add_argument("--json", action="store_true", help="the report as JSON (the contract)")
-    tasks_cmd = sub.add_parser("tasks", help="a submitted job: its state, or the report once it is done")
-    tasks_cmd.add_argument("--task", metavar="ID", help="the job to read")
+    tasks_cmd = sub.add_parser("task", help="a submitted job: its state, or the report once it is done")
+    tasks_cmd.add_argument("id", nargs="?", metavar="ID", help="the task id: `local:…` or `arsenkin:…`")
     tasks_cmd.add_argument("--wait", action="store_true", help="block until the job finishes")
     tasks_cmd.add_argument("--run", metavar="ID", help=argparse.SUPPRESS)  # the detached worker of --submit
     tasks_cmd.add_argument("--tasks-dir", help="where the task files live (default: the user state dir)")
@@ -101,7 +101,7 @@ Commands:
   run       run one workflow
   semantics  a keyword set for one URL or a batch, from an external service
   top        positions in Arsenkin's check-top shape, from our serp or from Arsenkin
-  tasks      a submitted job: its state, or the report once it is done
+  task       a submitted job: its state, or the report once it is done
   doctor    readiness of this machine: keys, proxies, the workflow engine
   auth      credentials of the services
   describe  this contract
@@ -163,9 +163,10 @@ DESCRIBE = {
                 ],
             },
             {
-                "name": "tasks",
+                "name": "task",
                 "description": "a submitted job: its state, or the report once it is done",
-                "options": [_param("--task", "str"), _param("--wait", "boolean", False), _JSON_OPTION],
+                "arguments": [_param("id", "str")],
+                "options": [_param("--wait", "boolean", False), _JSON_OPTION],
             },
             {
                 "name": "top",
@@ -181,9 +182,10 @@ DESCRIBE = {
                 ],
             },
             {
-                "name": "tasks",
+                "name": "task",
                 "description": "a submitted job: its state, or the report once it is done",
-                "options": [_param("--task", "str"), _param("--wait", "boolean", False), _JSON_OPTION],
+                "arguments": [_param("id", "str")],
+                "options": [_param("--wait", "boolean", False), _JSON_OPTION],
             },
             {
                 "name": "top",
@@ -258,7 +260,7 @@ def main(argv: list[str] | None = None) -> int:
         return _semantics(args)
     if args.command == "top":
         return _top(args)
-    if args.command == "tasks":
+    if args.command == "task":
         return _tasks(args)
     if args.command == "doctor":
         return _doctor()
@@ -300,7 +302,7 @@ def _tasks(args: argparse.Namespace) -> int:
     if args.run:
         tasks_module.run_task(args.run, tasks_dir)
         return 0
-    if not args.task:
+    if not args.id:
         print(
             json.dumps(
                 {"ok": False, "error": {"code": "INVALID_ARGUMENTS", "message": "nothing to read: pass --task ID"}},
@@ -308,13 +310,11 @@ def _tasks(args: argparse.Namespace) -> int:
             )
         )
         raise SystemExit(2)
-    answer = (
-        tasks_module.wait_local(args.task, tasks_dir) if args.wait else tasks_module.poll_local(args.task, tasks_dir)
-    )
+    answer = tasks_module.wait_local(args.id, tasks_dir) if args.wait else tasks_module.poll_local(args.id, tasks_dir)
     if args.json:
         print(json.dumps(answer, ensure_ascii=False))
     else:
-        print(f"{args.task}: {answer.get('state')}")
+        print(f"{args.id}: {answer.get('state')}")
     return 0 if answer.get("ok") and answer.get("state") != "error" else 1
 
 
@@ -336,7 +336,7 @@ def _top(args: argparse.Namespace) -> int:
         if args.json:
             print(json.dumps(answer, ensure_ascii=False))
         else:
-            print(f"{args.task}: {answer.get('state')}")
+            print(f"{args.id}: {answer.get('state')}")
         return 0 if answer.get("ok") and answer.get("state") != "error" else 1
     if not args.input:
         print(
@@ -390,7 +390,7 @@ def _tasks(args: argparse.Namespace) -> int:
     if args.run:
         tasks_module.run_task(args.run, tasks_dir)
         return 0
-    if not args.task:
+    if not args.id:
         print(
             json.dumps(
                 {"ok": False, "error": {"code": "INVALID_ARGUMENTS", "message": "nothing to read: pass --task ID"}},
@@ -398,13 +398,11 @@ def _tasks(args: argparse.Namespace) -> int:
             )
         )
         raise SystemExit(2)
-    answer = (
-        tasks_module.wait_local(args.task, tasks_dir) if args.wait else tasks_module.poll_local(args.task, tasks_dir)
-    )
+    answer = tasks_module.wait_local(args.id, tasks_dir) if args.wait else tasks_module.poll_local(args.id, tasks_dir)
     if args.json:
         print(json.dumps(answer, ensure_ascii=False))
     else:
-        print(f"{args.task}: {answer.get('state')}")
+        print(f"{args.id}: {answer.get('state')}")
     return 0 if answer.get("ok") and answer.get("state") != "error" else 1
 
 
@@ -426,7 +424,7 @@ def _top(args: argparse.Namespace) -> int:
         if args.json:
             print(json.dumps(answer, ensure_ascii=False))
         else:
-            print(f"{args.task}: {answer.get('state')}")
+            print(f"{args.id}: {answer.get('state')}")
         return 0 if answer.get("ok") and answer.get("state") != "error" else 1
     if not args.input:
         print(

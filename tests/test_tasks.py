@@ -27,7 +27,7 @@ def test_submit_answers_at_once_and_the_worker_is_started(monkeypatch, tmp_path)
     answer = tasks.submit_local("semantics", {"urls": ["https://a.example/"]}, tmp_path)
 
     assert (answer["ok"], answer["state"], answer["kind"]) == (True, "running", "semantics")
-    assert answer["poll"] == f"wf tasks --task {answer['task_id']} --json"
+    assert answer["poll"] == f"wf task {answer['task_id']} --json"
     assert spawned == [answer["task_id"]]
     assert tasks.read(answer["task_id"], tmp_path)["args"] == {"urls": ["https://a.example/"]}
 
@@ -96,11 +96,11 @@ def test_the_cli_reads_a_task_and_exits_by_its_state(monkeypatch, tmp_path, caps
     from rb_workflows import cli
 
     tasks.write({"task_id": "t6", "kind": "semantics", "state": "running", "args": {}}, tmp_path)
-    assert cli.main(["tasks", "--task", "t6", "--tasks-dir", str(tmp_path), "--json"]) == 0
+    assert cli.main(["task", "t6", "--tasks-dir", str(tmp_path), "--json"]) == 0
     assert json.loads(capsys.readouterr().out)["state"] == "running"
 
     tasks.update("t6", tmp_path, state="error", error="boom")
-    assert cli.main(["tasks", "--task", "t6", "--tasks-dir", str(tmp_path), "--json"]) == 1
+    assert cli.main(["task", "t6", "--tasks-dir", str(tmp_path), "--json"]) == 1
 
 
 def test_the_cli_submits_a_semantics_job(monkeypatch, tmp_path, capsys) -> None:

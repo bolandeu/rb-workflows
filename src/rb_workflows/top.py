@@ -305,27 +305,40 @@ async def submit(
     if source not in SOURCE_NAMES:
         raise ValueError(f"unknown source '{source}'; known: {', '.join(SOURCE_NAMES)}")
     data = normalise(request)
+    if source == "arsenkin":
+        # their id is the task: no local file, the service owns the state
+        task_id = f"arsenkin:{await set_remote(data, token=token)}"
+        return {
+            "ok": True,
+            "task_id": task_id,
+            "source": source,
+            "state": "running",
+            "poll_after_s": 15,
+            "poll": f"wf task {task_id} --json",
+        }
     task_id = tasks.new_id()
     record: dict = {"task_id": task_id, "kind": "top", "source": source, "state": "running", "request": data}
-    if source == "arsenkin":
-        record["remote_task_id"] = await set_remote(data, token=token)
-        tasks.write(record, tasks_dir)
-    else:
-        record["args"] = kwargs
-        tasks.write(record, tasks_dir)
-        tasks.spawn(task_id, tasks_dir)
+    record["args"] = kwargs
+    tasks.write(record, tasks_dir)
+    tasks.spawn(task_id, tasks_dir)
     return {
         "ok": True,
         "task_id": task_id,
         "source": source,
         "state": "running",
         "poll_after_s": 15,
-        "poll": f"wf top --task {task_id} --json",
+        "poll": f"wf task {task_id} --json",
     }
 
 
 async def poll(task_id: str, *, tasks_dir: Path | None = None, token: str | None = None) -> dict:
-    """The state of a task, or its report once it is done. A failed task is `ok: false` with its error."""
+    """The state of a task, or its report once it is done. A failed task is `ok: false` with its error.
+
+    The id names its store: `arsenkin:32070249` is asked of Arsenkin itself, `local:…` is read here.
+    """
+    store, name = tasks.split_id(task_id)
+    if store == "arsenkin":
+        return await _poll_remote(int(name), token=token)
     record = tasks.read(task_id, tasks_dir)
     state = record.get("state")
     if state == "done":
@@ -357,6 +370,58 @@ async def poll(task_id: str, *, tasks_dir: Path | None = None, token: str | None
             "retry_after_s": 15,
         }
     return {"ok": True, "state": "running", "task_id": task_id, "retry_after_s": 15}
+
+
+async def _poll_remote(remote_id: int, *, token: str | None = None) -> dict:
+    """Ask Arsenkin about its own task and turn a finished one into our report."""
+    status = await remote_state(remote_id, token=token)
+    remote = str(status.get("status") or "").lower()
+    if remote in arsenkin.DONE:
+        return await _remote_report(remote_id, token=token)
+    if remote in arsenkin.FAILED:
+        return {
+            "ok": False,
+            "state": "error",
+            "task_id": f"arsenkin:{remote_id}",
+            "error": f"arsenkin task {remote_id} ended as '{remote}': {status.get('msg') or ''}".strip(),
+        }
+    return {
+        "ok": True,
+        "state": "process",
+        "task_id": f"arsenkin:{remote_id}",
+        "progress": status.get("progress"),
+        "retry_after_s": 15,
+    }
+
+
+async def _remote_report(remote_id: int, *, token: str | None = None) -> dict:
+    answer = await remote_result(remote_id, token=token)
+    request = (answer.get("result") or {}).get("request") or {}
+    data = (
+        normalise(
+            {
+                "queries": request.get("queries") or [],
+                "se": [{"type": se.get("ss"), "region": se.get("region")} for se in request.get("ss") or []],
+                "depth": request.get("depth") or 10,
+            }
+        )
+        if request
+        else {"queries": [], "se": [], "depth": 10, "is_snippet": False, "noreask": False}
+    )
+    return {
+        "ok": True,
+        "state": "done",
+        "task_id": f"arsenkin:{remote_id}",
+        "source": "arsenkin",
+        "result": {"request": request, "result": (answer.get("result") or {}).get("result") or {}},
+        "summary": summary(
+            ((answer.get("result") or {}).get("result") or {}).get("collect") or [],
+            queries=data["queries"],
+            se=data["se"],
+            depth=data["depth"],
+            top_n=10,
+        ),
+    }
 
 
 async def wait(task_id: str, *, tasks_dir: Path | None = None, poll_interval: float | None = None) -> dict:

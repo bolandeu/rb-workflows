@@ -36,6 +36,13 @@
 URL в порядке выдачи; `summary.top` — URL по силе. Неподдерживаемый движок (YouTube) даёт пустой список и индекс
 в `skipped`, не ошибку. Arsenkin-статусы: известные «готово»/«провал», всё остальное (`starting`, `process`) — ждём.
 
+## `wf task` и слой задач
+
+Медленная работа ставится через `--submit` и читается через `wf task <id> [--wait]`; тип задачи (`kind`) лежит в
+записи, наружу не передаётся. Id с префиксом хранилища: `local:…` (файл на машине, воркер `wf task --run <id>`),
+`arsenkin:…` (состояние спрашиваем у них). В Python: `top.collect/submit`, `semantics.collect/submit`,
+`tasks.get/wait`.
+
 ## Ключи
 
 `credentials.binding(service)` выбирает бэкенд по месту запуска: Windmill-ресурс (`WM_TOKEN`) → 9router

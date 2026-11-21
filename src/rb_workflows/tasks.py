@@ -48,13 +48,23 @@ def state_dir(base: Path | None = None) -> Path:
     return platformdirs.user_state_path(APP, appauthor=False) / "tasks"
 
 
-def new_id() -> str:
-    """A short, sortable id: time prefix plus four random bytes (two submits in the same second do not collide)."""
-    return f"{time.strftime('%Y%m%d-%H%M%S')}-{secrets.token_hex(4)}"
+STORE_LOCAL = "local"
+
+
+def new_id(store: str = STORE_LOCAL) -> str:
+    """A namespaced id: `<store>:<sortable time>-<random>`, so a reader knows where the state lives."""
+    return f"{store}:{time.strftime('%Y%m%d-%H%M%S')}-{secrets.token_hex(4)}"
+
+
+def split_id(task_id: str) -> tuple[str, str]:
+    """`local:2026…` → `("local", "2026…")`; an id without a store is a local one (the CLI's own older files)."""
+    store, _, rest = task_id.partition(":")
+    return (store, rest) if rest and ":" not in rest else (STORE_LOCAL, task_id)
 
 
 def _path(task_id: str, base: Path | None = None) -> Path:
-    return state_dir(base) / f"{task_id}.json"
+    store, name = split_id(task_id)
+    return state_dir(base) / f"{store}-{name}.json"
 
 
 def write(task: Mapping, base: Path | None = None) -> dict:
@@ -139,7 +149,7 @@ def submit_local(kind: str, args: Mapping, base: Path | None = None) -> dict:
         "kind": kind,
         "state": "running",
         "poll_after_s": 15,
-        "poll": f"wf tasks --task {task_id} --json",
+        "poll": f"wf task {task_id} --json",
     }
 
 

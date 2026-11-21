@@ -35,7 +35,7 @@ def test_submit_starts_a_task_and_answers_at_once(monkeypatch, tmp_path) -> None
 
     assert answer["ok"] is True and answer["state"] == "running"
     assert answer["poll_after_s"] == 15
-    assert answer["poll"] == f"wf top --task {answer['task_id']} --json"
+    assert answer["poll"] == f"wf task {answer['task_id']} --json"
     assert spawned == [answer["task_id"]]
     stored = tasks.read(answer["task_id"], tmp_path)
     assert (stored["state"], stored["source"], stored["request"]["queries"]) == ("running", "serp", ["диван"])
@@ -108,7 +108,8 @@ def test_submitting_to_arsenkin_only_places_the_task_and_remembers_the_remote_id
 
     assert answer["state"] == "running"
     assert placed and placed[0]["queries"] == ["диван"]
-    assert tasks.read(answer["task_id"], tmp_path)["remote_task_id"] == 777
+    assert answer["task_id"] == "arsenkin:777"  # their id is the task; no local file is written
+    assert answer["poll"] == "wf task arsenkin:777 --json"
 
 
 def test_polling_an_arsenkin_task_reads_the_remote_state(monkeypatch, tmp_path) -> None:

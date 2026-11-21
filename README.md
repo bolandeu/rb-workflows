@@ -73,6 +73,19 @@ wf semantics --urls https://site.ru/page --engine gru --service arsenkin --json
 Он зовёт `serp search` по одному вызову на запрос, параллельно до `--concurrency`, и складывает ответы в общий отчёт
 `top`. Пачка запросов, кэш журнала и все параметры `serp` приходят через поле `queries` и `--concurrency`.
 
+## `task` — поставил и вернулся
+
+Любая медленная команда ставится сразу и читается потом; тип задачи передавать не нужно, он записан при постановке.
+Идентификатор говорит, где живёт состояние: `local:20261121-101500-ab12cd34` — файл на этой машине,
+`arsenkin:32070249` — задача у Arsenkin.
+
+```bash
+wf semantics --urls https://a.ru https://b.ru --submit --json   # {"task_id": "local:…", "poll": "wf task local:… --json"}
+wf top --input top.json --source arsenkin --submit --json       # {"task_id": "arsenkin:32070249", …}
+wf task local:20261121-101500-ab12cd34 --json                   # состояние или готовый отчёт
+wf task arsenkin:32070249 --wait --json                         # блокировать до конца
+```
+
 ## `top` — выгрузка ТОП в формате Arsenkin, из двух источников
 
 Вход и выход — формат Arsenkin `check-top`, поэтому задание, написанное под их API, работает здесь без правок,
