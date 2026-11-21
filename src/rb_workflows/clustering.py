@@ -120,43 +120,40 @@ def _echo(data: Mapping) -> dict:
 # --- grouping ---------------------------------------------------------------------------------------------------
 
 
-class _Union:
-    """Union-find over the phrases: two phrases in one set are one cluster."""
-
-    def __init__(self, items: Iterable[str]) -> None:
-        self.parent = {item: item for item in items}
-
-    def find(self, item: str) -> str:
-        while self.parent[item] != item:
-            self.parent[item] = self.parent[self.parent[item]]
-            item = self.parent[item]
-        return item
-
-    def merge(self, left: str, right: str) -> None:
-        self.parent[self.find(left)] = self.find(right)
-
-
 def clusters(tops: Mapping[str, list[str]], *, group: str, count: int) -> list[list[str]]:
-    """Group the phrases by the URLs their tops share; returns the clusters in the order of the first phrase.
+    """Group the phrases by the URLs their tops share; the clusters come in the order of their first phrase.
 
-    `hard` merges two phrases only when they share at least `count` URLs, `soft` merges on a single shared URL. The
-    phrases keep the order they were asked in, and a phrase sharing nothing stays a cluster of its own.
+    Two groups merge when their tops share enough URLs *and* that shared part is at least `CONTAINMENT[group]` of the
+    smaller group's top: `hard` needs `count` shared URLs and half of the smaller top to be the same pages, `soft` one
+    shared URL and two fifths. The share
+    matters more than the count, because a popular aggregator puts one URL into every top of a niche — a rule that counts
+    URLs alone then collapses the whole niche into one cluster.
 
-    ponytail: Arsenkin's own meaning of `count` is theirs; ours is the overlap threshold, which is the same knob with
-    a plain definition. Replace it here if their numbers must match theirs exactly.
+    Merging is greedy and strongest-first: at every step the pair with the largest overlap joins, so the result does not
+    depend on the order the phrases were asked in, and a group that grows must keep overlapping as it grows.
+
+    ponytail: Arsenkin's own meaning of `count` is theirs; ours is the shared-URL threshold with a containment floor, the
+    same knob with a plain definition. Replace it here if their numbers must match theirs exactly.
     """
-    phrases = list(tops)
-    union = _Union(phrases)
-    urls = {phrase: {canonical(url) for url in tops[phrase]} for phrase in phrases}
-    for index, left in enumerate(phrases):
-        for right in phrases[index + 1 :]:
-            shared = len(urls[left] & urls[right])
-            if shared >= count if group == "hard" else shared >= 1:
-                union.merge(left, right)
-    grouped: dict[str, list[str]] = defaultdict(list)
-    for phrase in phrases:
-        grouped[union.find(phrase)].append(phrase)
-    return list(grouped.values())
+    groups = {index: [phrase] for index, phrase in enumerate(tops)}
+    urls = {index: {canonical(url) for url in urls_of} for index, urls_of in enumerate(tops.values())}
+    floor = CONTAINMENT[group]
+    need = count if group == "hard" else 1
+    while True:
+        best, pair = 0, None
+        live = sorted(groups)
+        for position, left in enumerate(live):
+            for right in live[position + 1 :]:
+                shared = len(urls[left] & urls[right])
+                smaller = min(len(urls[left]), len(urls[right])) or 1
+                if shared >= need and shared / smaller >= floor and shared > best:
+                    best, pair = shared, (left, right)
+        if pair is None:
+            return [groups[key] for key in sorted(groups)]
+        left, right = pair
+        groups[left] += groups[right]
+        urls[left] |= urls[right]
+        del groups[right], urls[right]
 
 
 # --- our own source: serp for the tops, wordstat for the frequencies ---------------------------------------------
@@ -185,6 +182,8 @@ TRACKING = frozenset(
         "_openstat",
     }
 )
+# How much of the smaller group's top must be the same pages for a merge: `hard` is the strict one.
+CONTAINMENT = {"hard": 0.5, "soft": 0.4}
 # Files an engine may show instead of the bare directory: the same main page under another address.
 INDEX_FILES = frozenset({"index.html", "index.htm", "index.php", "index.shtml", "default.aspx", "default.html"})
 

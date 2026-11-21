@@ -98,11 +98,14 @@ def test_what_the_documented_request_forbids_is_refused_before_any_call() -> Non
         clustering.normalise({"queries": ["q"], "se": 1, "region": 213, "ws": ["wide"]})
 
 
-def test_soft_merges_on_one_shared_url_and_hard_needs_count_of_them() -> None:
+def test_a_merge_needs_both_the_count_and_a_share_of_the_smaller_top() -> None:
     tops = {"a": ["u1", "u2"], "b": ["u1", "u3"], "c": ["u4"]}
-    assert clustering.clusters(tops, group="soft", count=3) == [["a", "b"], ["c"]]
-    assert clustering.clusters(tops, group="hard", count=2) == [["a"], ["b"], ["c"]]
+    assert clustering.clusters(tops, group="soft", count=1) == [["a", "b"], ["c"]]  # one shared URL is half of a/b
     assert clustering.clusters(tops, group="hard", count=1) == [["a", "b"], ["c"]]
+    assert clustering.clusters(tops, group="hard", count=2) == [["a"], ["b"], ["c"]]  # not enough shared URLs
+    few = {"a": ["u1", "u2", "u3", "u4"], "b": ["u1", "u9", "u10", "u11"]}
+    assert clustering.clusters(few, group="hard", count=1) == [["a"], ["b"]]  # a quarter is too little
+    assert clustering.clusters(few, group="soft", count=1) == [["a"], ["b"]]
 
 
 def test_the_serp_source_groups_after_the_stoplist_and_without_main_pages(monkeypatch) -> None:
@@ -255,3 +258,12 @@ def test_their_real_answer_is_read_into_clusters_with_the_single_phrases_too() -
     assert first["agregators"] == 10  # the worst share among the phrases
     assert first["queries"][1]["toponim"] == "москва"
     assert first["queries"][0]["toponim"] is None  # their `-` is “no toponym”
+
+
+def test_one_popular_url_does_not_collapse_the_whole_batch() -> None:
+    tops = {
+        "a": ["u1", "a2", "a3", "a4"],
+        "b": ["u1", "b2", "b3", "b4"],
+        "c": ["u1", "c2", "c3", "c4"],
+    }
+    assert clustering.clusters(tops, group="soft", count=1) == [["a"], ["b"], ["c"]]
