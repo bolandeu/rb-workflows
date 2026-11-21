@@ -104,6 +104,7 @@ def normalise(request: Mapping) -> dict:
         "is_clear_minus": _flag(data.get("is_clear_minus")),
         "is_right": _flag(data.get("is_right")),
         "is_clear": _flag(data.get("is_clear")),
+        "limit": _limit(data.get("limit")),
     }
 
 
@@ -112,6 +113,16 @@ def _as_int(value: object) -> int | None:
         return int(str(value))
     except (TypeError, ValueError):
         return None
+
+
+def _limit(value: object) -> int | None:
+    """How many similar phrases to ask for (our CLI's `--limit`, 1..2000); Arsenkin's own API has no such field."""
+    if value in (None, ""):
+        return None
+    limit = _as_int(value)
+    if limit is None or not 1 <= limit <= 2000:
+        raise ValueError(f"limit must be 1..2000, got {value}")
+    return limit
 
 
 def _flag(value: object, default: bool = True) -> bool:
@@ -130,9 +141,15 @@ def _search(
     provider: str | None,
     cache: bool,
     max_age: str | None,
+    device: str | None = None,
+    limit: int | None = None,
 ) -> dict:
     """One `wordstat search` call for the whole batch of phrases in one region; the parsed JSON answer."""
     argv = ["wordstat", "search", *queries, "--freq", ",".join(kinds), "--lr", str(region or RUSSIA)]
+    if device:
+        argv += ["--device", device]
+    if limit:
+        argv += ["--limit", str(limit)]
     if provider:
         argv += ["--provider", provider]
     if cache:
@@ -160,12 +177,6 @@ def _search(
     return payload
 
 
-def _need_device(data: Mapping) -> None:
-    """Our CLI collects all devices only: anything else is refused here, not silently answered with the wrong number."""
-    if data["device"]:
-        raise ValueError(f"device '{data['device']}' is not supported by our wordstat CLI: only all devices ('')")
-
-
 async def _frequencies(
     data: Mapping, *, provider: str | None, cache: bool, max_age: str | None, concurrency: int
 ) -> tuple[dict[str, dict[str, dict[str, int]]], str | None]:
@@ -182,7 +193,14 @@ async def _frequencies(
         async with gate:
             try:
                 answer = await asyncio.to_thread(
-                    _search, data["queries"], wanted, region, provider=provider, cache=cache, max_age=max_age
+                    _search,
+                    data["queries"],
+                    wanted,
+                    region,
+                    provider=provider,
+                    cache=cache,
+                    max_age=max_age,
+                    device=data["device"] or None,
                 )
             except RuntimeError as exc:  # one region failed: the rest of the task is still worth having
                 return region, None, str(exc)[:300]
@@ -218,7 +236,15 @@ async def _phrases(
         async with gate:
             try:
                 answer = await asyncio.to_thread(
-                    _search, [query], ["broad"], data["region"], provider=provider, cache=cache, max_age=max_age
+                    _search,
+                    [query],
+                    ["broad"],
+                    data["region"],
+                    provider=provider,
+                    cache=cache,
+                    max_age=max_age,
+                    device=data["device"] or None,
+                    limit=data.get("limit"),
                 )
             except RuntimeError as exc:  # a failed query is a value: the batch goes on
                 return None, str(exc)[:300]
@@ -395,7 +421,6 @@ async def collect(
         if cached:
             report["cached"] = True
         return report
-    _need_device(data)
     started = time.monotonic()
     if data["type"] == 1:
         frequencies, warning = await _frequencies(

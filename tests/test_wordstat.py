@@ -121,10 +121,15 @@ def test_type_2_parses_phrases_and_applies_the_minus_words_the_right_column_and_
     assert quiet["result"]["data"][0]["right"] == {}
 
 
-def test_a_device_our_cli_cannot_collect_is_refused_said_and_not_answered(monkeypatch) -> None:
-    _fake_cli(monkeypatch)
-    with pytest.raises(ValueError, match="device 'desktop' is not supported"):
-        _run(wordstat.collect({**FREQUENCY["data"], "device": "desktop"}, source="wordstat"))
+def test_the_device_and_the_depth_go_to_our_cli(monkeypatch) -> None:
+    calls = _fake_cli(monkeypatch)
+
+    report = _run(wordstat.collect({**PHRASES["data"], "device": "desktop", "limit": 500}, source="wordstat"))
+
+    argv = calls[0]
+    assert argv[argv.index("--device") + 1] == "desktop"
+    assert argv[argv.index("--limit") + 1] == "500"
+    assert report["result"]["data"][0]["freq"] == 100
 
 
 def test_the_arsenkin_source_sends_the_documented_body_for_each_type(monkeypatch) -> None:

@@ -160,6 +160,7 @@ def _parser() -> argparse.ArgumentParser:
     word.add_argument("--region", help="with --type 2: one Yandex `lr` code, e.g. 213")
     word.add_argument("--ws", help="with --type 1: frequencies to collect — base, quoted, overal, exact")
     word.add_argument("--device", help="desktop, mobile, phone, tablet; empty means all devices")
+    word.add_argument("--limit", help="with --source wordstat, type 2: how many similar phrases to ask (1..2000)")
     word.add_argument("--minus-words", help="with --type 2: comma-separated minus-words")
     word.add_argument(
         "--is-clear-minus",
@@ -353,6 +354,7 @@ DESCRIBE = {
                     _param("--region", "str"),
                     _param("--ws", "str"),
                     _param("--device", "str"),
+                    _param("--limit", "str"),
                     _param("--minus-words", "str"),
                     _param("--is-clear-minus", "boolean", True),
                     _param("--is-right", "boolean", True),
@@ -579,6 +581,8 @@ def _wordstat_body(args: argparse.Namespace) -> dict:
     for key, value in (("ws", args.ws), ("device", args.device), ("minus_words", args.minus_words)):
         if value:
             body[key] = [entry.strip() for entry in value.split(",") if entry.strip()] if key != "device" else value
+    if args.limit:
+        body["limit"] = args.limit
     for key in ("is_clear_minus", "is_right", "is_clear"):
         if getattr(args, key) is not None:
             body[key] = getattr(args, key)
