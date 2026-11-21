@@ -17,6 +17,7 @@ import sys
 import time
 from collections.abc import Mapping
 from pathlib import Path
+from typing import Protocol, runtime_checkable
 
 import platformdirs
 
@@ -170,7 +171,7 @@ def run_task(task_id: str, base: Path | None = None) -> None:
     task = read(task_id, base)
     try:
         job = _import(KINDS[task["kind"]])
-        report = asyncio.run(job(**task["args"]))
+        report = asyncio.run(job(task["request"]))
         update(task_id, base, state="done", report=report)
     except Exception as exc:  # a worker must leave a readable state, not a traceback in a log
         update(task_id, base, state="error", error=f"{type(exc).__name__}: {exc}"[:400])
@@ -185,3 +186,95 @@ def wait_local(task_id: str, base: Path | None = None, *, poll_interval: float =
         if answer.get("state") in {"done", "error"}:
             return answer
         _time.sleep(poll_interval)
+
+
+# --- the store: where a task lives is not the command's business -------------------------------------------------
+
+
+@runtime_checkable
+class Store(Protocol):
+    """Three calls a front end needs: place a job, read it, cancel it. The CLI keeps them in files; a service in a DB."""
+
+    def create(self, kind: str, request: Mapping) -> dict: ...
+    def get(self, task_id: str) -> dict: ...
+    def save(self, task: Mapping) -> dict: ...
+    def cancel(self, task_id: str) -> dict: ...
+
+
+class FileStore:
+    """One JSON file per task under a directory: the CLI's store, and the worker it spawns is this same CLI."""
+
+    def __init__(self, base: Path | None = None) -> None:
+        self.base = base
+
+    def create(self, kind: str, request: Mapping) -> dict:
+        task_id = new_id()
+        task = {"task_id": task_id, "kind": kind, "state": "running", "request": dict(request)}
+        write(task, self.base)
+        return task
+
+    def get(self, task_id: str) -> dict:
+        return read(task_id, self.base)
+
+    def save(self, task: Mapping) -> dict:
+        return write(task, self.base)
+
+    def cancel(self, task_id: str) -> dict:
+        return update(task_id, self.base, state="cancelled", cancelled_at=time.strftime("%Y-%m-%dT%H:%M:%SZ"))
+
+
+def default_store(base: Path | None = None) -> Store:
+    """The store this process uses: files, unless a front end passes its own."""
+    return FileStore(base)
+
+
+async def submit(kind: str, request: Mapping, *, store: Store | None = None) -> dict:
+    """Place a job and answer at once: its id, the state and the call that reads it later."""
+    store = store or default_store()
+    if kind not in KINDS:
+        raise ValueError(f"unknown job '{kind}'; known: {', '.join(sorted(KINDS))}")
+    task = store.create(kind, request)
+    spawn(str(task["task_id"]), store.base if isinstance(store, FileStore) else None)
+    return {
+        "ok": True,
+        "task_id": task["task_id"],
+        "kind": kind,
+        "state": "running",
+        "poll_after_s": 15,
+        "poll": f"wf task {task['task_id']} --json",
+    }
+
+
+def get(task_id: str, *, store: Store | None = None) -> dict:
+    """The state of a job, or its report once it is done; a failed job is `ok: false` with its error."""
+    store = store or default_store()
+    task = store.get(task_id)
+    state = task.get("state")
+    if state == "done":
+        return {**task.get("report", {}), "state": "done", "task_id": task_id}
+    if state in {"error", "cancelled"}:
+        return {"ok": False, "state": state, "task_id": task_id, "error": task.get("error") or f"task {state}"}
+    return {
+        "ok": True,
+        "task_id": task_id,
+        "kind": task.get("kind"),
+        "state": "running",
+        "progress": None,
+        "retry_after_s": 15,
+    }
+
+
+def wait(task_id: str, *, store: Store | None = None, poll_interval: float = 5.0) -> dict:
+    """Poll until the job is done, failed or cancelled."""
+    while True:
+        answer = get(task_id, store=store)
+        if answer.get("state") in {"done", "error", "cancelled"}:
+            return answer
+        time.sleep(poll_interval)
+
+
+def cancel(task_id: str, *, store: Store | None = None) -> dict:
+    """Ask the store to forget the job; a running worker notices nothing, which the answer says honestly."""
+    store = store or default_store()
+    task = store.cancel(task_id)
+    return {"ok": True, "task_id": task_id, "state": task.get("state")}

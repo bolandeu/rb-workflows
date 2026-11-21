@@ -163,6 +163,10 @@ async def collect(
     A query or an engine the source cannot answer contributes an empty list, never an exception: the report says
     `ok: false` only when the whole call failed, and `skipped` names the engine indices nobody was asked about.
     """
+    # a submitted job carries the task's own envelope: `{"request": <check-top body>, "source": "serp"}`
+    if isinstance(request, Mapping) and "request" in request:
+        source = str(request.get("source") or source)
+        request = request["request"]
     if source not in SOURCE_NAMES:
         raise ValueError(f"unknown source '{source}'; known: {', '.join(SOURCE_NAMES)}")
     data = normalise(request)
@@ -302,6 +306,10 @@ async def submit(
     `serp` is started as a detached worker of this CLI (it outlives the call), `arsenkin` only records their task id —
     the service is already doing the work. Either way the caller gets the same three things.
     """
+    # a submitted job carries the task's own envelope: `{"request": <check-top body>, "source": "serp"}`
+    if isinstance(request, Mapping) and "request" in request:
+        source = str(request.get("source") or source)
+        request = request["request"]
     if source not in SOURCE_NAMES:
         raise ValueError(f"unknown source '{source}'; known: {', '.join(SOURCE_NAMES)}")
     data = normalise(request)
@@ -316,7 +324,7 @@ async def submit(
             "poll_after_s": 15,
             "poll": f"wf task {task_id} --json",
         }
-    return tasks.submit_local("top", {"request": data, **kwargs}, tasks_dir)
+    return await tasks.submit("top", {"request": data, **kwargs}, store=tasks.FileStore(tasks_dir))
 
 
 async def poll(task_id: str, *, tasks_dir: Path | None = None, token: str | None = None) -> dict:
@@ -327,38 +335,7 @@ async def poll(task_id: str, *, tasks_dir: Path | None = None, token: str | None
     store, name = tasks.split_id(task_id)
     if store == "arsenkin":
         return await _poll_remote(int(name), token=token)
-    return tasks.poll_local(task_id, tasks_dir)
-    record = tasks.read(task_id, tasks_dir)
-    state = record.get("state")
-    if state == "done":
-        return {**record["report"], "state": "done", "task_id": task_id}
-    if state == "error":
-        return {"ok": False, "state": "error", "task_id": task_id, "error": record.get("error")}
-    if record.get("source") == "arsenkin" and record.get("remote_task_id"):
-        status = await remote_state(int(record["remote_task_id"]), token=token)
-        remote = str(status.get("status") or "").lower()
-        if remote in arsenkin.DONE:
-            answer = await remote_result(int(record["remote_task_id"]), token=token)
-            collect_rows = _truncate(
-                (answer.get("result") or {}).get("result", {}).get("collect") or [], record["request"]["depth"]
-            )
-            report = build_report(
-                request=record["request"], source="arsenkin", collect=collect_rows, task_id=record["remote_task_id"]
-            )
-            tasks.update(task_id, tasks_dir, state="done", report=report)
-            return {**report, "state": "done", "task_id": task_id}
-        if remote in arsenkin.FAILED:
-            error = f"arsenkin task {record['remote_task_id']} ended as '{remote}': {status.get('msg') or ''}".strip()
-            tasks.update(task_id, tasks_dir, state="error", error=error)
-            return {"ok": False, "state": "error", "task_id": task_id, "error": error}
-        return {
-            "ok": True,
-            "state": "process",
-            "task_id": task_id,
-            "progress": status.get("progress"),
-            "retry_after_s": 15,
-        }
-    return {"ok": True, "state": "running", "task_id": task_id, "retry_after_s": 15}
+    return tasks.get(task_id, store=tasks.FileStore(tasks_dir))
 
 
 async def _poll_remote(remote_id: int, *, token: str | None = None) -> dict:

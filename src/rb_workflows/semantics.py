@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections import defaultdict
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 
 import httpx
 
@@ -81,8 +81,9 @@ _LIMITER = RateLimiter()
 
 
 async def collect(
-    urls: Iterable[str],
+    request: Mapping | Iterable[str],
     *,
+    urls: Iterable[str] | None = None,
     name: str = "arsenkin",
     region: str = "msk",
     stopwords: Iterable[str] = (),
@@ -91,7 +92,49 @@ async def collect(
     poll_interval: float = 15.0,
     token: str | None = None,
 ) -> dict:
-    """Every URL through one service, up to `concurrency` at a time; the report and its summary.
+    """Every URL of `request` through one service, up to `concurrency` at a time; the report and its summary.
+
+    `request` is the job's own schema: `{"urls": [...], "engine": "msk", "stopwords": [...],
+    "concurrency": 5, "timeout": 1800, "poll_interval": 15}`. The keyword arguments stay for the CLI and for callers
+    that already hold them: an argument named here wins over the same key in the request.
+    """
+    # a caller may pass the bare list of URLs (the CLI's own habit) or the job's request dict
+    fields: Mapping = request if isinstance(request, Mapping) else {}
+    urls = (
+        urls if urls is not None else (fields.get("urls") or list(request) if not fields else fields.get("urls") or [])
+    )
+    name = str(fields.get("service") or name)
+    region = str(fields.get("engine") or fields.get("region") or region)
+    stopwords = fields.get("stopwords") or stopwords
+    concurrency = int(fields.get("concurrency") or concurrency)
+    timeout = float(fields.get("timeout") or timeout)
+    poll_interval = float(fields.get("poll_interval") or poll_interval)
+    token = str(fields["token"]) if fields.get("token") else token
+
+    return await _collect(
+        urls,
+        name=name,
+        region=region,
+        stopwords=stopwords,
+        concurrency=concurrency,
+        timeout=timeout,
+        poll_interval=poll_interval,
+        token=token,
+    )
+
+
+async def _collect(
+    urls: Iterable[str],
+    *,
+    name: str,
+    region: str,
+    stopwords: Iterable[str],
+    concurrency: int,
+    timeout: float,
+    poll_interval: float,
+    token: str | None,
+) -> dict:
+    """The batch itself: `concurrency` jobs in flight, one rate limiter, one summary.
 
     The batch never waits for the first URL: `concurrency` tasks are in flight (5 is the account's own limit), each one
     a full set → check → get pipeline, so a slow task only occupies its own slot. Every request of every task passes the

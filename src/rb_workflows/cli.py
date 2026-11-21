@@ -64,6 +64,7 @@ def _parser() -> argparse.ArgumentParser:
     tasks_cmd = sub.add_parser("task", help="a submitted job: its state, or the report once it is done")
     tasks_cmd.add_argument("id", nargs="?", metavar="ID", help="the task id: `local:…` or `arsenkin:…`")
     tasks_cmd.add_argument("--wait", action="store_true", help="block until the job finishes")
+    tasks_cmd.add_argument("--cancel", action="store_true", help="ask the store to drop the job")
     tasks_cmd.add_argument("--run", metavar="ID", help=argparse.SUPPRESS)  # the detached worker of --submit
     tasks_cmd.add_argument("--tasks-dir", help="where the task files live (default: the user state dir)")
     tasks_cmd.add_argument("--json", action="store_true", help="the report as JSON (the contract)")
@@ -166,7 +167,7 @@ DESCRIBE = {
                 "name": "task",
                 "description": "a submitted job: its state, or the report once it is done",
                 "arguments": [_param("id", "str")],
-                "options": [_param("--wait", "boolean", False), _JSON_OPTION],
+                "options": [_param("--wait", "boolean", False), _param("--cancel", "boolean", False), _JSON_OPTION],
             },
             {
                 "name": "top",
@@ -185,7 +186,7 @@ DESCRIBE = {
                 "name": "task",
                 "description": "a submitted job: its state, or the report once it is done",
                 "arguments": [_param("id", "str")],
-                "options": [_param("--wait", "boolean", False), _JSON_OPTION],
+                "options": [_param("--wait", "boolean", False), _param("--cancel", "boolean", False), _JSON_OPTION],
             },
             {
                 "name": "top",
@@ -306,7 +307,11 @@ def _tasks(args: argparse.Namespace) -> int:
             )
         )
         raise SystemExit(2)
-    answer = tasks_module.wait_local(args.id, tasks_dir) if args.wait else tasks_module.poll_local(args.id, tasks_dir)
+    store = tasks_module.FileStore(tasks_dir)
+    if args.cancel:
+        answer = tasks_module.cancel(args.id, store=store)
+    else:
+        answer = tasks_module.wait(args.id, store=store) if args.wait else tasks_module.get(args.id, store=store)
     if args.json:
         print(json.dumps(answer, ensure_ascii=False))
     else:
@@ -388,15 +393,20 @@ def _semantics(args: argparse.Namespace) -> int:
 
         from . import tasks as tasks_module
 
-        answer = tasks_module.submit_local(
-            "semantics",
-            {
-                "urls": list(args.urls),
-                "name": args.service,
-                "region": args.engine,
-                "stopwords": words,
-            },
-            Path(args.tasks_dir) if args.tasks_dir else None,
+        answer = asyncio.run(
+            tasks_module.submit(
+                "semantics",
+                {
+                    "urls": list(args.urls),
+                    "service": args.service,
+                    "engine": args.engine,
+                    "stopwords": words,
+                    "concurrency": args.concurrency or 5,
+                    "timeout": args.timeout,
+                    "poll_interval": args.poll_interval,
+                },
+                store=tasks_module.FileStore(Path(args.tasks_dir) if args.tasks_dir else None),
+            )
         )
         if args.json:
             print(json.dumps(answer, ensure_ascii=False))

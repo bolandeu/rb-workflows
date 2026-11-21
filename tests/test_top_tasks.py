@@ -22,8 +22,9 @@ def _run(coroutine):
 
 
 async def _fake_collect(request, **kwargs):
+    body = request.get("request", request) if isinstance(request, dict) else request
     return top.build_report(
-        request=top.normalise(request), source=kwargs.get("source", "serp"), collect=[[["https://a/1"]]]
+        request=top.normalise(body), source=kwargs.get("source", "serp"), collect=[[["https://a/1"]]]
     )
 
 
@@ -38,7 +39,7 @@ def test_submit_starts_a_task_and_answers_at_once(monkeypatch, tmp_path) -> None
     assert answer["poll"] == f"wf task {answer['task_id']} --json"
     assert spawned == [answer["task_id"]]
     stored = tasks.read(answer["task_id"], tmp_path)
-    assert (stored["state"], stored["kind"], stored["args"]["request"]["queries"]) == ("running", "top", ["диван"])
+    assert (stored["state"], stored["kind"], stored["request"]["request"]["queries"]) == ("running", "top", ["диван"])
 
 
 def test_poll_of_a_running_task_reports_the_state_and_when_to_come_back(tmp_path) -> None:
@@ -73,7 +74,7 @@ def test_an_unknown_task_is_the_callers_mistake(tmp_path) -> None:
 
 def test_the_worker_finishes_the_task_and_stores_the_report(monkeypatch, tmp_path) -> None:
     tasks.write(
-        {"task_id": "t4", "kind": "top", "state": "running", "args": {"request": top.normalise(REQUEST)}}, tmp_path
+        {"task_id": "t4", "kind": "top", "state": "running", "request": {"request": top.normalise(REQUEST)}}, tmp_path
     )
     monkeypatch.setattr(tasks, "_import", lambda target: _fake_collect)
 
@@ -85,11 +86,11 @@ def test_the_worker_finishes_the_task_and_stores_the_report(monkeypatch, tmp_pat
 
 
 def test_a_worker_that_crashes_leaves_an_error_task_not_a_traceback(monkeypatch, tmp_path) -> None:
-    async def boom(**kwargs):
+    async def boom(request: dict):
         raise RuntimeError("serp is not installed")
 
     tasks.write(
-        {"task_id": "t5", "kind": "top", "state": "running", "args": {"request": top.normalise(REQUEST)}}, tmp_path
+        {"task_id": "t5", "kind": "top", "state": "running", "request": {"request": top.normalise(REQUEST)}}, tmp_path
     )
     monkeypatch.setattr(tasks, "_import", lambda target: boom)
 
