@@ -13,6 +13,7 @@ from __future__ import annotations
 import contextlib
 import importlib
 import os
+import shutil
 import subprocess
 
 __all__ = ["binding", "in_windmill"]
@@ -51,13 +52,12 @@ def _from_ninerouter(service: str, key: str | None) -> tuple[str | None, str | N
 
 def _from_token_cli(service: str) -> tuple[str | None, str | None]:
     """The generic token store of this machine: `token get <service>` (keychain, Doppler as the fallback)."""
+    exe = shutil.which("token")
+    if exe is None:
+        return None, None
     try:
-        found = subprocess.run(
-            ["token", "get", service],  # noqa: S607 — the CLI of this very machine, found on PATH
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=20,
+        found = subprocess.run(  # noqa: S603 - the path is resolved here, not built from input
+            [exe, "get", service], capture_output=True, text=True, check=False, timeout=20
         )
     except (OSError, subprocess.SubprocessError):
         return None, None
