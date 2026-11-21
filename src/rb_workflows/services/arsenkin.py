@@ -145,6 +145,24 @@ async def collect_clustering(
     )
 
 
+async def collect_wordstat(
+    client: httpx.AsyncClient,
+    token: str,
+    data: dict,
+    *,
+    poll_interval: float = 15.0,
+    timeout: float = 3600.0,
+) -> dict:
+    """Their Wordstat task (`type` 1 frequencies, `type` 2 phrase parsing): the documented body in, their answer out."""
+    return await _collect_task(
+        client,
+        token,
+        {"tools_name": "wordstat", "data": dict(data)},
+        poll_interval=poll_interval,
+        timeout=timeout,
+    )
+
+
 async def _collect_task(
     client: httpx.AsyncClient,
     token: str,

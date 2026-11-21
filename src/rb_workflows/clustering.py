@@ -43,9 +43,9 @@ SOURCES = ("serp", "arsenkin")
 GROUPS = ("hard", "soft")
 DEPTHS = (10, 20, 30)
 ENGINES = {1: "yandex", 2: "google"}
-# Arsenkin's frequency names → the ones the `wordstat` CLI knows. `overal` is their other name for the broad number.
+# Arsenkin's frequency names → the ones the `wordstat` CLI knows: `overal` is `!фраза`, `exact` is `[!фраза]`.
 WS_TYPES = ("base", "quoted", "overal", "exact")
-WS_TO_WORDSTAT = {"base": "broad", "overal": "broad", "quoted": "phrase", "exact": "exact"}
+WS_TO_WORDSTAT = {"base": "broad", "quoted": "phrase", "overal": "exact", "exact": "exact-ord"}
 WORDSTAT_TIMEOUT = 600.0
 SLEEP = 2.0  # seconds between polls inside `wait`
 
@@ -313,7 +313,7 @@ def _frequencies(
 
 
 def _words(frequencies: Mapping[str, Mapping[str, int]], query: str, kinds: Iterable[str]) -> dict:
-    """One phrase as the report shows it: the broad number as `ws`, the strict one as `ws_strict`, all asked types."""
+    """One phrase as the report shows it: the broad number as `ws`, `!фраза` as `ws_strict`, all asked types."""
     found = frequencies.get(query) or {}
     return {
         "ws": found.get("broad"),

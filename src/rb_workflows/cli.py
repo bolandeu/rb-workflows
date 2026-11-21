@@ -144,6 +144,55 @@ def _parser() -> argparse.ArgumentParser:
     cluster.add_argument("--run", metavar="ID", help=argparse.SUPPRESS)  # the detached worker of --submit
     cluster.add_argument("--tasks-dir", help="where the task files live (default: the user state dir)")
     cluster.add_argument("--json", action="store_true", help="the report as JSON (the contract)")
+    word = sub.add_parser(
+        "wordstat", help="Arsenkin's Wordstat API: type 1 collects frequencies, type 2 parses phrases"
+    )
+    word.add_argument(
+        "--input",
+        help="JSON file with the wordstat body (or the bare data). Required keys: queries and regions (type 1) or "
+        "region (type 2); optional: type (1), ws ([base]), device (''), minus_words, is_clear_minus, is_right, is_clear",
+    )
+    word.add_argument("--type", type=int, choices=(1, 2), help="1 frequencies, 2 phrase parsing (default: 1)")
+    word.add_argument("--queries", nargs="+", help="phrases to collect (instead of --input)")
+    word.add_argument("--regions", help="with --type 1: comma-separated Yandex `lr` codes, at most 4, e.g. 213,225")
+    word.add_argument("--region", help="with --type 2: one Yandex `lr` code, e.g. 213")
+    word.add_argument("--ws", help="with --type 1: frequencies to collect — base, quoted, overal, exact")
+    word.add_argument("--device", help="desktop, mobile, phone, tablet; empty means all devices")
+    word.add_argument("--minus-words", help="with --type 2: comma-separated minus-words")
+    word.add_argument(
+        "--is-clear-minus",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="with --type 2: drop phrases with minus-words (default: true)",
+    )
+    word.add_argument(
+        "--is-right",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="with --type 2: collect the right column of Wordstat (default: true)",
+    )
+    word.add_argument(
+        "--is-clear",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="with --type 2: drop the '+' from the phrases (default: true)",
+    )
+    word.add_argument(
+        "--source", default="wordstat", choices=("wordstat", "arsenkin"), help="who answers (default: our CLI)"
+    )
+    word.add_argument("--provider", help="with --source wordstat: the provider queue, e.g. xmlriver,xmlstock")
+    word.add_argument("--cache", action="store_true", help="with --source wordstat: take the answer from the journal")
+    word.add_argument("--max-age", help="with --cache: the oldest journal answer to accept, e.g. 7d")
+    word.add_argument("--timeout", type=float, default=3600.0, help="seconds the whole task may take (source=arsenkin)")
+    word.add_argument(
+        "--poll-interval", type=float, default=15.0, help="seconds between status checks (source=arsenkin)"
+    )
+    word.add_argument("--submit", action="store_true", help="place the task and answer with its id at once")
+    word.add_argument("--task", metavar="ID", help="read a submitted task: its state, or the report when it is done")
+    word.add_argument("--wait", action="store_true", help="with --task: block until the task finishes")
+    word.add_argument("--run", metavar="ID", help=argparse.SUPPRESS)  # the detached worker of --submit
+    word.add_argument("--tasks-dir", help="where the task files live (default: the user state dir)")
+    word.add_argument("--json", action="store_true", help="the report as JSON (the contract)")
     go = sub.add_parser("run", help="run one workflow")
     go.add_argument("workflow", choices=sorted(WORKFLOWS))
     go.add_argument("--input", help='JSON object with the workflow input, e.g. {"urls": ["https://example.com"]}')
@@ -162,6 +211,7 @@ Commands:
   semantics  a keyword set for one URL or a batch, from an external service
   top        positions in Arsenkin's check-top shape, from our serp or from Arsenkin
   clustering keywords grouped by the URLs they share, in Arsenkin's clustering shape
+  wordstat  Arsenkin's Wordstat API: type 1 frequencies, type 2 phrase parsing
   task       a submitted job: its state, or the report once it is done
   doctor    readiness of this machine: keys, proxies, the workflow engine
   auth      credentials of the services
@@ -287,6 +337,31 @@ DESCRIBE = {
                 ],
             },
             {
+                "name": "wordstat",
+                "description": "Arsenkin's Wordstat API: type 1 collects frequencies (queries, regions, ws), type 2 "
+                "parses phrases (queries, region, minus_words, is_right) — as a JSON file or as flags",
+                "options": [
+                    _param("--input", "path"),
+                    _param("--type", "int", 1),
+                    _param("--queries", "str", multiple=True),
+                    _param("--regions", "str"),
+                    _param("--region", "str"),
+                    _param("--ws", "str"),
+                    _param("--device", "str"),
+                    _param("--minus-words", "str"),
+                    _param("--is-clear-minus", "boolean", True),
+                    _param("--is-right", "boolean", True),
+                    _param("--is-clear", "boolean", True),
+                    _param("--source", "choice", "wordstat"),
+                    _param("--provider", "str"),
+                    _param("--cache", "boolean", False),
+                    _param("--max-age", "str"),
+                    _param("--timeout", "float", 3600.0),
+                    _param("--poll-interval", "float", 15.0),
+                    _JSON_OPTION,
+                ],
+            },
+            {
                 "name": "doctor",
                 "description": "readiness of this machine: keys, proxies, the workflow engine",
                 "options": [_JSON_OPTION],
@@ -332,6 +407,8 @@ def main(argv: list[str] | None = None) -> int:
         return _top(args)
     if args.command == "clustering":
         return _clustering(args)
+    if args.command == "wordstat":
+        return _wordstat(args)
     if args.command == "task":
         return _tasks(args)
     if args.command == "doctor":
@@ -485,10 +562,98 @@ def _clustering(args: argparse.Namespace) -> int:
     return 0 if report["ok"] else 1
 
 
+def _wordstat_body(args: argparse.Namespace) -> dict:
+    """`--type 1 --queries … --regions 213,225 --ws base` → the wordstat body Arsenkin documents."""
+    kind = args.type or 1
+    body: dict = {"type": kind, "queries": list(args.queries)}
+    if kind == 1 and args.regions:
+        body["regions"] = [entry.strip() for entry in args.regions.split(",") if entry.strip()]
+    if kind == 2 and args.region:
+        body["region"] = args.region
+    for key, value in (("ws", args.ws), ("device", args.device), ("minus_words", args.minus_words)):
+        if value:
+            body[key] = [entry.strip() for entry in value.split(",") if entry.strip()] if key != "device" else value
+    for key in ("is_clear_minus", "is_right", "is_clear"):
+        if getattr(args, key) is not None:
+            body[key] = getattr(args, key)
+    return body
+
+
+def _wordstat(args: argparse.Namespace) -> int:
+    from pathlib import Path
+
+    from . import wordstat as wordstat_source
+
+    tasks_dir = Path(args.tasks_dir) if args.tasks_dir else None
+    if args.run:  # the worker of a submitted `wordstat` job goes through the shared runner
+        from . import tasks as tasks_module
+
+        tasks_module.run_task(args.run, tasks_dir)
+        return 0
+    if args.task:
+        answer = asyncio.run(
+            wordstat_source.wait(args.task, tasks_dir=tasks_dir)
+            if args.wait
+            else wordstat_source.poll(args.task, tasks_dir=tasks_dir)
+        )
+        if args.json:
+            print(json.dumps(answer, ensure_ascii=False))
+        else:
+            print(f"{args.task}: {answer.get('state')}")
+        return 0 if answer.get("ok") and answer.get("state") != "error" else 1
+    if args.input:
+        request = _read_json(Path(args.input))
+    elif args.queries:
+        request = _wordstat_body(args)
+    else:
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "error": {
+                        "code": "INVALID_ARGUMENTS",
+                        "message": "nothing to do: pass --input, or --queries with --regions/--region, or --task ID",
+                    },
+                },
+                ensure_ascii=False,
+            )
+        )
+        raise SystemExit(2)
+    if args.submit:
+        answer = asyncio.run(wordstat_source.submit(request, source=args.source, tasks_dir=tasks_dir))
+        if args.json:
+            print(json.dumps(answer, ensure_ascii=False))
+        else:
+            print(f"{answer['task_id']}: {answer['state']}; {answer['poll']}")
+        return 0
+    report = asyncio.run(
+        wordstat_source.collect(
+            request,
+            source=args.source,
+            provider=args.provider,
+            cache=args.cache,
+            max_age=args.max_age,
+            poll_interval=args.poll_interval,
+            timeout=args.timeout,
+        )
+    )
+    if args.json:
+        print(json.dumps(report, ensure_ascii=False))
+        return 0 if report["ok"] else 1
+    result = report["result"]
+    if result.get("type") == 1:
+        for query, per_region in (result["data"].get("result") or {}).items():
+            print(f"{query}: " + ", ".join(f"{region} {values}" for region, values in per_region.items()))
+    else:
+        for query, row in zip(result["queries"], result.get("data") or [], strict=False):
+            print(f"{query}: {len(row.get('left') or {})} left, {len(row.get('right') or {})} right")
+    return 0 if report["ok"] else 1
+
+
 def _tasks(args: argparse.Namespace) -> int:
     from pathlib import Path
 
-    from . import clustering  # noqa: F401 - importing it registers the `clustering` task kind and its report
+    from . import clustering, wordstat  # noqa: F401 - importing them registers their task kinds and reports
     from . import tasks as tasks_module
 
     tasks_dir = Path(args.tasks_dir) if args.tasks_dir else None

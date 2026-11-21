@@ -149,6 +149,29 @@ wf clustering --input clustering.json --source arsenkin --json
 `queries` (по фразе: `ws`, `ws_strict`, `ws_types`). `agregators` и `geo` у своего источника `null`: для них нужны их
 списки. `summary` — число кластеров, фраз и `skipped` — запросы, которые источник не ответил.
 
+## `wordstat` — частотность и парсинг фраз, из двух источников
+
+Вход и выход — Arsenkin `wordstat` (один `tools_name`, два `type`), поэтому задание под их API работает без правок.
+Источник — наш CLI `wordstat` (по умолчанию) или сам Arsenkin.
+
+```bash
+wf wordstat --queries "ремонт киа" --regions 213,225 --ws base,exact --json          # type 1: частоты
+wf wordstat --type 2 --queries "ремонт киа" --region 213 --minus-words дилер --json  # type 2: фразы
+wf wordstat --input wordstat.json --source arsenkin --json
+```
+
+```json
+{"tools_name": "wordstat",
+ "data": {"type": 1, "queries": ["ремонт киа"], "regions": [213, 225], "ws": ["base", "exact"], "device": ""}}
+```
+
+Ответ в их раскладке: type 1 — `result.data.result[фраза][регион][вид]`; type 2 — `result.data[]` по фразе с `freq`,
+`left` (похожие запросы) и `right` (ассоциации). Наша `summary` считает строки.
+
+Имена частот переводятся на язык CLI: `base` → `broad`, `quoted` → `phrase`, `overal` → `exact` (`!фраза`),
+`exact` → `exact-ord` (`[!фраза]`). Чего наш CLI не умеет, говорится до платного вызова: `device` кроме всех устройств
+и больше одного региона (Arsenkin берёт до 4). Регион `0` (вся страна) спрашивается как `225`.
+
 ## Ключи и прокси
 
 `credentials.binding(service)` выбирает бэкенд по месту запуска, а не по воркфлоу:

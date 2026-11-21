@@ -47,6 +47,14 @@ search`, группировка по пересечению URL: `hard` — не
 `agregators`/`geo` — `null` (нужны ихние списки). `main: true` убирает главные страницы из группировки, но считает их
 в поле `main`. Упавший запрос — в `summary.skipped`, не ошибка всей задачи.
 
+## `wf wordstat`
+
+Arsenkin `wordstat`: `type` 1 — частоты (`queries`, `regions` до 4, `ws`, `device`), `type` 2 — парсинг фраз
+(`queries`, `region`, `minus_words`, `is_right`, `is_clear`, `is_clear_minus`). Источник `--source wordstat|arsenkin`.
+Наш CLI отдаёт только все устройства и один регион — остальное отвергается до платного вызова; имена частот:
+`base`→`broad`, `quoted`→`phrase`, `overal`→`exact`, `exact`→`exact-ord`. Фразы — это `broad`-ответ CLI: `popular` —
+левая колонка, `associations` — правая, минус-слова и «+» фильтруются локально.
+
 ## `wf task` и слой задач
 
 Медленная работа ставится через `--submit` и читается через `wf task <id> [--wait]`; тип задачи (`kind`) лежит в

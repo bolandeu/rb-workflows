@@ -134,7 +134,7 @@ def test_wordstat_is_asked_only_when_ws_names_a_frequency_and_feeds_wssumm(monke
 
     wordstat = [call for call in calls if call[0] == "wordstat"]
     assert len(wordstat) == 1
-    assert wordstat[0][wordstat[0].index("--freq") + 1] == "broad,exact"
+    assert wordstat[0][wordstat[0].index("--freq") + 1] == "broad,exact-ord"  # base is broad, exact is `[!фраза]`
     first = report["result"]["result"][0]
     assert first["wssumm"] == 1000  # two phrases, 500 each
     assert first["queries"][0]["ws"] == 500
