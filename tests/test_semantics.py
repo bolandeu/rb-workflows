@@ -160,3 +160,23 @@ async def test_arsenkin_reports_a_rate_limit_instead_of_guessing(monkeypatch: py
     async with _client(lambda request: httpx.Response(429, json={})) as client:
         with pytest.raises(arsenkin.ArsenkinError, match="rate limited"):
             await arsenkin.collect(client, "t", "https://a.example/")
+
+
+async def test_the_cache_answers_the_second_run_without_the_service(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("WORKFLOWS_CACHE_PATH", str(tmp_path))
+    monkeypatch.delenv("WORKFLOWS_DATABASE_URL", raising=False)
+    calls: list[str] = []
+
+    def answer(url: str) -> dict:
+        calls.append(url)
+        return _document(url, ("диван", 1))
+
+    monkeypatch.setitem(services.SERVICES, "fake", _service(answer))
+
+    first = await semantics.collect(["https://ok.example/"], name="fake", token="t", cache=True)
+    second = await semantics.collect(["https://ok.example/"], name="fake", token="t", cache=True)
+
+    assert calls == ["https://ok.example/"]  # the service ran once
+    assert first["urls"][0].get("cached") is None
+    assert second["urls"][0]["cached"] is True
+    assert second["urls"][0]["queries"] == first["urls"][0]["queries"]

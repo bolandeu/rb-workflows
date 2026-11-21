@@ -28,6 +28,7 @@ from collections.abc import Iterable, Mapping
 
 import httpx
 
+from . import cache as cache_store
 from .credentials import binding
 from .services import Service, service
 
@@ -106,7 +107,19 @@ async def _one(
     timeout: float,
     poll_interval: float,
     mode: str = "url",
+    name: str = "",
+    cache: bool = False,
+    max_age: str | None = None,
 ) -> dict:
+    question = {
+        "service": name,
+        "url": url,
+        "region": region,
+        "stopwords": list(stopwords),
+        "mode": mode,
+    }
+    if cache and (stored := cache_store.load("semantics", question, max_age=max_age)) is not None:
+        return {**stored, "cached": True}
     try:
         async with _LIMITER:
             found = await module.collect(
@@ -119,7 +132,9 @@ async def _one(
                 timeout=timeout,
                 poll_interval=poll_interval,
             )
-        return {"ok": True, **found}
+        document = {"ok": True, **found}
+        cache_store.save("semantics", question, document)
+        return document
     except Exception as exc:  # a failed URL is a value: the batch goes on
         return {"url": url, "ok": False, "error": f"{type(exc).__name__}: {exc}"[:400]}
 
@@ -138,6 +153,8 @@ async def collect(
     timeout: float = 1800.0,
     poll_interval: float = 15.0,
     token: str | None = None,
+    cache: bool = False,
+    max_age: str | None = None,
 ) -> dict:
     """Every URL of `request` through one service, up to `concurrency` at a time; the report and its summary.
 
@@ -157,6 +174,8 @@ async def collect(
     timeout = float(fields.get("timeout") or timeout)
     poll_interval = float(fields.get("poll_interval") or poll_interval)
     token = str(fields["token"]) if fields.get("token") else token
+    cache = bool(fields.get("cache")) or cache
+    max_age = str(fields["max_age"]) if fields.get("max_age") else max_age
 
     return await _collect(
         urls,
@@ -167,6 +186,8 @@ async def collect(
         timeout=timeout,
         poll_interval=poll_interval,
         token=token,
+        cache=cache,
+        max_age=max_age,
     )
 
 
@@ -180,6 +201,8 @@ async def _collect(
     timeout: float,
     poll_interval: float,
     token: str | None,
+    cache: bool = False,
+    max_age: str | None = None,
     mode: str = "url",
 ) -> dict:
     """The batch itself: `concurrency` jobs in flight, one rate limiter, one summary.
@@ -224,6 +247,9 @@ async def _collect(
                 mode=mode,
                 timeout=timeout,
                 poll_interval=poll_interval,
+                name=name,
+                cache=cache,
+                max_age=max_age,
             )
 
     async with httpx.AsyncClient(timeout=60.0, trust_env=False) as client:

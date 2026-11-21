@@ -64,6 +64,8 @@ def _parser() -> argparse.ArgumentParser:
     sem.add_argument("--concurrency", type=int, default=None, help="tasks in flight at once (the account allows 5)")
     sem.add_argument("--timeout", type=float, default=1800.0, help="seconds a single task may take")
     sem.add_argument("--poll-interval", type=float, default=15.0, help="seconds between status checks")
+    sem.add_argument("--cache", action="store_true", help="answer from the stored task payload when there is one")
+    sem.add_argument("--max-age", help="with --cache: the oldest stored answer to accept, e.g. 7d")
     sem.add_argument("--submit", action="store_true", help="place the job and answer with its id at once")
     sem.add_argument("--tasks-dir", help="where the task files live (default: the user state dir)")
     sem.add_argument("--json", action="store_true", help="the report as JSON (the contract)")
@@ -271,6 +273,8 @@ DESCRIBE = {
                     _param("--engine", "choice", "msk"),
                     _param("--service", "str", "arsenkin"),
                     _param("--stopwords", "str"),
+                    _param("--cache", "boolean", False),
+                    _param("--max-age", "str"),
                     _param("--concurrency", "int"),
                     _param("--timeout", "float", 1800.0),
                     _param("--poll-interval", "float", 15.0),
@@ -803,6 +807,8 @@ def _semantics(args: argparse.Namespace) -> int:
                     **request,
                     "service": args.service,
                     "concurrency": args.concurrency or 5,
+                    "cache": args.cache,
+                    "max_age": args.max_age,
                 },
                 store=tasks_module.default_store(Path(args.tasks_dir) if args.tasks_dir else None),
             )
@@ -812,7 +818,15 @@ def _semantics(args: argparse.Namespace) -> int:
         else:
             print(f"{answer['task_id']}: {answer['state']}; {answer['poll']}")
         return 0
-    report = asyncio.run(collect(request, name=args.service, concurrency=args.concurrency or MAX_CONCURRENT))
+    report = asyncio.run(
+        collect(
+            request,
+            name=args.service,
+            concurrency=args.concurrency or MAX_CONCURRENT,
+            cache=args.cache,
+            max_age=args.max_age,
+        )
+    )
     if args.json:
         print(json.dumps(report, ensure_ascii=False))
         return 0 if report["ok"] else 1
