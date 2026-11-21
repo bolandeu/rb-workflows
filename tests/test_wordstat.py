@@ -174,7 +174,7 @@ def test_the_arsenkin_source_sends_the_documented_body_for_each_type(monkeypatch
 
 
 def test_their_real_frequency_answer_is_read_into_the_documented_layout(monkeypatch) -> None:
-    async def fake_post(_client, _token, path, body):
+    async def fake_post(_client, _token, path, _body):
         if path == "set":
             return {"code": "SET_TASK_OK", "task_id": 7}
         if path == "check":
@@ -217,7 +217,7 @@ def test_the_cli_builds_the_body_from_flags(monkeypatch, capsys) -> None:
 
     seen: list[dict] = []
 
-    async def fake_collect(request, **kwargs):
+    async def fake_collect(request, **_):
         seen.append(dict(request))
         return {"ok": True, "summary": {"frequencies": 1}, "result": {"type": 1, "queries": [], "data": {"result": {}}}}
 
@@ -239,3 +239,27 @@ def test_the_cli_refuses_a_call_without_queries(capsys) -> None:
         cli.main(["wordstat", "--json"])
     assert exit_info.value.code == 2
     assert json.loads(capsys.readouterr().out)["error"]["code"] == "INVALID_ARGUMENTS"
+
+
+def test_a_frequency_our_cli_spells_with_an_underscore_is_still_read(monkeypatch) -> None:
+    def run(argv, **_):
+        return subprocess.CompletedProcess(
+            argv,
+            0,
+            stdout=json.dumps(
+                {
+                    "ok": True,
+                    "results": [{"query": "таможенное оформление", "freq_type": "exact_ord", "total_value": 100}],
+                }
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr(subprocess, "run", run)
+
+    report = _run(
+        wordstat.collect(
+            {"type": 1, "queries": ["таможенное оформление"], "regions": [213], "ws": ["exact"]}, source="wordstat"
+        )
+    )
+    assert report["result"]["data"]["result"]["таможенное оформление"]["213"] == {"exact": 100}

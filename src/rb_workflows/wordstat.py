@@ -182,7 +182,8 @@ def _frequencies(
             query = str(item.get("query"))
             value = item.get("total_value")
             frequency = found.setdefault(query, {}).setdefault(str(region), {})
-            name = CLI_TO_WS.get(str(item.get("freq_type")))
+            # our CLI spells `exact-ord` as `exact_ord` in the answer, whatever it accepted on the command line
+            name = CLI_TO_WS.get(str(item.get("freq_type")).replace("_", "-"))
             if name is not None and name in data["ws"] and isinstance(value, int):
                 frequency[name] = value
     return found, (warnings[0] if warnings else None)
