@@ -101,6 +101,7 @@ wf task --gc --older-than 7 --json                              # убрать �
 ```bash
 wf top --queries "ремонт киа" --se 1:213 --json          # то же, но флагами
 wf top --input top.json --source serp --json            # наш serp search
+wf top --queries "q" --provider xmlriver,xmlstock --cache --max-age 7d --json
 wf top --input top.json --source arsenkin --json      # их задача check-top
 ```
 

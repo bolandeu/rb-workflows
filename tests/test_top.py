@@ -12,6 +12,7 @@ Rules these tests pin:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import subprocess
 from collections.abc import Callable
@@ -321,3 +322,22 @@ def test_describe_names_every_command_once_and_says_what_is_required() -> None:
     descriptions = {command["name"]: command.get("description", "") for command in commands}
     assert "required: queries, se" in descriptions["top"]
     assert "required: queries (or urls)" in descriptions["semantics"]
+
+
+def test_the_serp_provider_queue_and_the_journal_flags_reach_the_cli(monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    def run(argv, **kwargs):
+        calls.append(list(argv))
+        return subprocess.CompletedProcess(
+            argv, 0, stdout=json.dumps({"ok": True, "results": [], "sources": []}), stderr=""
+        )
+
+    monkeypatch.setattr(top.serp_source.subprocess, "run", run)
+    request = {"queries": ["q"], "se": [{"type": 1, "region": 213}], "depth": 10}
+    asyncio.run(top.collect(request, source="serp", provider="xmlriver,xmlstock", cache=True, max_age="7d"))
+
+    argv = calls[0]
+    assert argv[argv.index("--provider") : argv.index("--provider") + 2] == ["--provider", "xmlriver,xmlstock"]
+    assert "--cache" in argv
+    assert argv[argv.index("--max-age") : argv.index("--max-age") + 2] == ["--max-age", "7d"]

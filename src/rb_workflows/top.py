@@ -113,7 +113,15 @@ def _truncate(collect: list[list[list[str]]], depth: int) -> list[list[list[str]
     return [[[url for url in urls[:depth]] for urls in per_se] for per_se in collect]
 
 
-async def _from_serp(data: Mapping, *, concurrency: int, token: str | None) -> tuple[list[list[list[str]]], list[int]]:
+async def _from_serp(
+    data: Mapping,
+    *,
+    concurrency: int,
+    token: str | None,
+    provider: str | None = None,
+    cache: bool = False,
+    max_age: str | None = None,
+) -> tuple[list[list[list[str]]], list[int]]:
     """Ask our own CLI once per query and place the answers by engine; returns the collect and the skipped se indices."""
     engines = [ENGINE_TYPES[entry["type"]] for entry in data["se"]]
     skipped = [index for index, engine in enumerate(engines) if engine is None]
@@ -132,6 +140,9 @@ async def _from_serp(data: Mapping, *, concurrency: int, token: str | None) -> t
         concurrency=concurrency,
         yandex_lr=yandex_lr,
         google_loc=str(google_loc) if google_loc is not None else None,
+        provider=provider,
+        cache=cache,
+        max_age=max_age,
     )
     by_query: dict[str, dict[str, list[str]]] = {query: defaultdict(list) for query in data["queries"]}
     for entry in report.get("results") or []:
@@ -161,6 +172,9 @@ async def collect(
     poll_interval: float = 15.0,
     timeout: float = 3600.0,
     top_n: int = 10,
+    provider: str | None = None,
+    cache: bool = False,
+    max_age: str | None = None,
 ) -> dict:
     """Run one `check-top` task through `source` and return the report in Arsenkin's shape plus the summary.
 
@@ -188,7 +202,9 @@ async def collect(
         task_id = answer.get("task_id")
         collect_rows = _truncate(result.get("result", {}).get("collect") or _empty(data), data["depth"])
     else:
-        collect_rows, skipped = await _from_serp(data, concurrency=concurrency, token=token)
+        collect_rows, skipped = await _from_serp(
+            data, concurrency=concurrency, token=token, provider=provider, cache=cache, max_age=max_age
+        )
         collect_rows = _truncate(collect_rows, data["depth"])
     report = build_report(request=data, source=source, collect=collect_rows, top_n=top_n, task_id=task_id)
     report["skipped"] = skipped

@@ -95,6 +95,9 @@ def _parser() -> argparse.ArgumentParser:
     top_cmd.add_argument("--run", metavar="ID", help=argparse.SUPPRESS)  # the detached worker of --submit
     top_cmd.add_argument("--tasks-dir", help="where the task files live (default: the user state dir)")
     top_cmd.add_argument("--source", default="serp", choices=("serp", "arsenkin"), help="who answers (default: serp)")
+    top_cmd.add_argument("--provider", help="with --source serp: the provider queue, e.g. xmlriver,xmlstock")
+    top_cmd.add_argument("--cache", action="store_true", help="with --source serp: take the answer from the journal")
+    top_cmd.add_argument("--max-age", help="with --cache: the oldest journal answer to accept, e.g. 7d")
     top_cmd.add_argument("--top-n", type=int, default=10, help="rows of the strength summary to show")
     top_cmd.add_argument("--concurrency", type=int, default=3, help="queries in flight at once (source=serp)")
     top_cmd.add_argument(
@@ -209,6 +212,9 @@ DESCRIBE = {
                     _param("--is-snippet", "boolean", False),
                     _param("--noreask", "boolean", False),
                     _param("--source", "choice", "serp"),
+                    _param("--provider", "str"),
+                    _param("--cache", "boolean", False),
+                    _param("--max-age", "str"),
                     _param("--top-n", "int", 10),
                     _param("--concurrency", "int", 3),
                     _param("--timeout", "float", 3600.0),
