@@ -157,3 +157,30 @@ def test_a_worker_that_finishes_after_cancelling_does_not_overwrite_the_state(mo
     stored = tasks.read("ta", tmp_path)
     assert stored["state"] == "cancelled"
     assert "report" not in stored  # the late report is not news for a caller who cancelled
+
+
+def test_gc_removes_finished_tasks_older_than_the_limit_and_keeps_the_rest(tmp_path) -> None:
+    import os
+    import time
+
+    for task_id, state, age_days in (("t-old", "done", 30), ("t-new", "done", 0), ("t-run", "running", 30)):
+        tasks.write({"task_id": task_id, "kind": "semantics", "state": state, "request": {}}, tmp_path)
+        path = tasks.state_dir(tmp_path) / f"local-{task_id}.json"
+        stamp = time.time() - age_days * 86400
+        os.utime(path, (stamp, stamp))
+
+    answer = tasks.gc(tmp_path, older_than_days=7)
+
+    assert answer["removed"] == ["t-old"]
+    assert answer["kept"] == 2  # a fresh one and a running one, whatever its age
+    assert tasks.read("t-new", tmp_path)["state"] == "done"
+
+def test_the_cli_says_an_unknown_id_in_the_envelope(tmp_path, capsys) -> None:
+    from rb_workflows import cli
+
+    with pytest.raises(SystemExit) as exit_info:
+        cli.main(["task", "local:top:nope", "--tasks-dir", str(tmp_path), "--json"])
+    assert exit_info.value.code == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["error"]["code"] == "INVALID_ARGUMENTS"
+    assert "no task 'local:top:nope'" in payload["error"]["message"]

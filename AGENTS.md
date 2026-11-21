@@ -43,6 +43,13 @@ URL в порядке выдачи; `summary.top` — URL по силе. Неп�
 `arsenkin:…` (состояние спрашиваем у них). В Python: `top.collect/submit`, `semantics.collect/submit`,
 `tasks.get/wait`.
 
+## Слой задач
+
+`tasks.submit(kind, request)` → id; `tasks.get/wait/cancel`; `tasks.gc` убирает завершённые файлы. Id:
+`<store>:<kind>:<name>` (`local:…`, `arsenkin:…`), по нему `CompositeStore` выбирает хранилище. Протокол `Store` —
+`create/get/save/cancel`, асинхронный: FastAPI/MCP подменит реализацию, остальное не меняется. Отмена локальной задачи
+шлёт SIGTERM воркеру, а отменённая задача не перезаписывается поздним результатом.
+
 ## Ключи
 
 `credentials.binding(service)` выбирает бэкенд по месту запуска: Windmill-ресурс (`WM_TOKEN`) → 9router

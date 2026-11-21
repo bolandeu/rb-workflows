@@ -64,7 +64,9 @@ def _parser() -> argparse.ArgumentParser:
     tasks_cmd = sub.add_parser("task", help="a submitted job: its state, or the report once it is done")
     tasks_cmd.add_argument("id", nargs="?", metavar="ID", help="the task id: `local:…` or `arsenkin:…`")
     tasks_cmd.add_argument("--wait", action="store_true", help="block until the job finishes")
-    tasks_cmd.add_argument("--cancel", action="store_true", help="ask the store to drop the job")
+    tasks_cmd.add_argument("--cancel", action="store_true", help="stop the job and its worker")
+    tasks_cmd.add_argument("--gc", action="store_true", help="remove finished local tasks older than --older-than")
+    tasks_cmd.add_argument("--older-than", type=float, default=7.0, metavar="DAYS", help="with --gc: the age to keep")
     tasks_cmd.add_argument("--run", metavar="ID", help=argparse.SUPPRESS)  # the detached worker of --submit
     tasks_cmd.add_argument("--tasks-dir", help="where the task files live (default: the user state dir)")
     tasks_cmd.add_argument("--json", action="store_true", help="the report as JSON (the contract)")
@@ -167,7 +169,13 @@ DESCRIBE = {
                 "name": "task",
                 "description": "a submitted job: its state, or the report once it is done",
                 "arguments": [_param("id", "str")],
-                "options": [_param("--wait", "boolean", False), _param("--cancel", "boolean", False), _JSON_OPTION],
+                "options": [
+                    _param("--wait", "boolean", False),
+                    _param("--cancel", "boolean", False),
+                    _param("--gc", "boolean", False),
+                    _param("--older-than", "float", 7.0),
+                    _JSON_OPTION,
+                ],
             },
             {
                 "name": "top",
@@ -186,7 +194,13 @@ DESCRIBE = {
                 "name": "task",
                 "description": "a submitted job: its state, or the report once it is done",
                 "arguments": [_param("id", "str")],
-                "options": [_param("--wait", "boolean", False), _param("--cancel", "boolean", False), _JSON_OPTION],
+                "options": [
+                    _param("--wait", "boolean", False),
+                    _param("--cancel", "boolean", False),
+                    _param("--gc", "boolean", False),
+                    _param("--older-than", "float", 7.0),
+                    _JSON_OPTION,
+                ],
             },
             {
                 "name": "top",
@@ -299,6 +313,14 @@ def _tasks(args: argparse.Namespace) -> int:
     if args.run:
         tasks_module.run_task(args.run, tasks_dir)
         return 0
+    if args.gc:
+        collected = tasks_module.gc(tasks_dir, older_than_days=args.older_than)
+        answer = {"ok": True, "task_id": None, **collected}
+        if args.json:
+            print(json.dumps(answer, ensure_ascii=False))
+        else:
+            print(f"removed {len(collected['removed'])}, kept {collected['kept']}")
+        return 0
     if not args.id:
         print(
             json.dumps(
@@ -308,12 +330,20 @@ def _tasks(args: argparse.Namespace) -> int:
         )
         raise SystemExit(2)
     store = tasks_module.default_store(tasks_dir)
-    if args.cancel:
-        answer = asyncio.run(tasks_module.cancel(args.id, store=store))
-    else:
-        answer = asyncio.run(
-            tasks_module.wait(args.id, store=store) if args.wait else tasks_module.get(args.id, store=store)
+    try:
+        if args.cancel:
+            answer = asyncio.run(tasks_module.cancel(args.id, store=store))
+        else:
+            answer = asyncio.run(
+                tasks_module.wait(args.id, store=store) if args.wait else tasks_module.get(args.id, store=store)
+            )
+    except (FileNotFoundError, ValueError) as exc:  # an id nobody knows: the caller's mistake, said plainly
+        print(
+            json.dumps(
+                {"ok": False, "error": {"code": "INVALID_ARGUMENTS", "message": str(exc)}}, ensure_ascii=False
+            )
         )
+        raise SystemExit(2) from None
     if args.json:
         print(json.dumps(answer, ensure_ascii=False))
     else:

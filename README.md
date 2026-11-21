@@ -84,7 +84,13 @@ wf semantics --urls https://a.ru https://b.ru --submit --json   # {"task_id": "l
 wf top --input top.json --source arsenkin --submit --json       # {"task_id": "arsenkin:32070249", …}
 wf task local:20261121-101500-ab12cd34 --json                   # состояние или готовый отчёт
 wf task arsenkin:32070249 --wait --json                         # блокировать до конца
+wf task local:… --cancel                                        # остановить задачу и её воркер
+wf task --gc --older-than 7 --json                              # убрать завершённые старше недели
 ```
+
+Задачи хранятся в `Store` (сейчас два: файлы на этой машине и сам Arsenkin), снаружи это четыре вызова —
+`create`, `get`, `save`, `cancel`. Приложение на FastAPI подставит свою реализацию, команды и формат ответа не
+изменятся.
 
 ## `top` — выгрузка ТОП в формате Arsenkin, из двух источников
 

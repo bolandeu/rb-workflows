@@ -37,6 +37,7 @@ __all__ = [
     "Store",
     "cancel",
     "default_store",
+    "gc",
     "get",
     "new_id",
     "read",
@@ -81,6 +82,29 @@ def split_id(task_id: str) -> tuple[str, str, str]:
     if len(parts) == 2 and parts[0] in STORES:
         return parts[0], "", parts[1]
     return "local", "", task_id
+
+
+def gc(base: Path | None = None, *, older_than_days: float = 7) -> dict:
+    """Remove the finished task files older than `older_than_days`: a store of reports is not a history to keep.
+
+    A running task is never touched, whatever its age. The answer says what was removed, so a caller can log it.
+    """
+    directory = state_dir(base)
+    if not directory.is_dir():
+        return {"removed": [], "kept": 0}
+    cutoff = time.time() - older_than_days * 86400
+    removed, kept = [], 0
+    for path in sorted(directory.glob("local-*.json")):
+        try:
+            task = json.loads(path.read_text(encoding="utf-8"))
+        except ValueError:
+            continue
+        if task.get("state") in {"done", "error", "cancelled"} and path.stat().st_mtime < cutoff:
+            path.unlink(missing_ok=True)
+            removed.append(str(task.get("task_id")))
+        else:
+            kept += 1
+    return {"removed": removed, "kept": kept}
 
 
 def _path(task_id: str, base: Path | None = None) -> Path:
