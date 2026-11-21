@@ -59,6 +59,14 @@ def _parser() -> argparse.ArgumentParser:
     sem.add_argument("--timeout", type=float, default=1800.0, help="seconds a single task may take")
     sem.add_argument("--poll-interval", type=float, default=15.0, help="seconds between status checks")
     sem.add_argument("--json", action="store_true", help="the report as JSON (the contract)")
+    top_cmd = sub.add_parser("top", help="positions in Arsenkin's check-top shape, from our serp or from Arsenkin")
+    top_cmd.add_argument("--input", required=True, help="JSON file with the check-top body (or the bare data object)")
+    top_cmd.add_argument("--source", default="serp", choices=("serp", "arsenkin"), help="who answers (default: serp)")
+    top_cmd.add_argument("--top-n", type=int, default=10, help="rows of the strength summary to show")
+    top_cmd.add_argument("--concurrency", type=int, default=3, help="queries in flight at once (source=serp)")
+    top_cmd.add_argument("--timeout", type=float, default=3600.0, help="seconds the whole task may take (source=arsenkin)")
+    top_cmd.add_argument("--poll-interval", type=float, default=15.0, help="seconds between status checks (source=arsenkin)")
+    top_cmd.add_argument("--json", action="store_true", help="the report as JSON (the contract)")
     serp_cmd = sub.add_parser(
         "serp", help="positions in Yandex/Google for a batch of queries, plus the cluster summary"
     )
@@ -89,6 +97,7 @@ Commands:
   run       run one workflow
   semantics  a keyword set for one URL or a batch, from an external service
   serp       positions in Yandex/Google for a batch of queries, plus the cluster summary
+  top        positions in Arsenkin's check-top shape, from our serp or from Arsenkin
   doctor    readiness of this machine: keys, proxies, the workflow engine
   auth      credentials of the services
   describe  this contract
@@ -145,6 +154,19 @@ DESCRIBE = {
                     _param("--stopwords", "str"),
                     _param("--concurrency", "int"),
                     _param("--timeout", "float", 1800.0),
+                    _param("--poll-interval", "float", 15.0),
+                    _JSON_OPTION,
+                ],
+            },
+            {
+                "name": "top",
+                "description": "positions in Arsenkin's check-top shape, from our serp or from Arsenkin",
+                "options": [
+                    _param("--input", "path"),
+                    _param("--source", "choice", "serp"),
+                    _param("--top-n", "int", 10),
+                    _param("--concurrency", "int", 3),
+                    _param("--timeout", "float", 3600.0),
                     _param("--poll-interval", "float", 15.0),
                     _JSON_OPTION,
                 ],
@@ -209,6 +231,8 @@ def main(argv: list[str] | None = None) -> int:
         return _semantics(args)
     if args.command == "serp":
         return _serp(args)
+    if args.command == "top":
+        return _top(args)
     if args.command == "doctor":
         return _doctor()
     if args.command == "auth":
@@ -238,6 +262,33 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())
+
+
+def _top(args: argparse.Namespace) -> int:
+    from pathlib import Path
+
+    from . import top as top_source
+
+    request = json.loads(Path(args.input).read_text(encoding="utf-8"))
+    report = asyncio.run(
+        top_source.collect(
+            request,
+            source=args.source,
+            concurrency=args.concurrency,
+            poll_interval=args.poll_interval,
+            timeout=args.timeout,
+            top_n=args.top_n,
+        )
+    )
+    if args.json:
+        print(json.dumps(report, ensure_ascii=False))
+        return 0 if report["ok"] else 1
+    collect = report["result"]["result"]["collect"]
+    for query, per_se in zip(report["result"]["request"]["queries"], collect, strict=True):
+        print(f"{query}: " + ", ".join(f"{len(urls)} urls" for urls in per_se))
+    for row in report["summary"]["top"]:
+        print(f"{row['strength']:.3f}  {row['url']}  (best {row['best_position']}, queries {row['queries_count']})")
+    return 0 if report["ok"] else 1
 
 
 def _serp(args: argparse.Namespace) -> int:

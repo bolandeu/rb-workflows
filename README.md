@@ -89,6 +89,28 @@ strength(url) = Σ (top - позиция + 1) / top  по всем попада�
 1.0 — первый в каждой ПС по каждому запросу. В строке сводки: `queries_count` (в скольких запросах встречается),
 `appearances` (всего попаданий), `best_position`, `by_query` (позиция в каждой ПС по каждому запросу, `null` если нет).
 
+## `top` — выгрузка ТОП в формате Arsenkin, из двух источников
+
+Вход и выход — формат Arsenkin `check-top`, поэтому задание, написанное под их API, работает здесь без правок,
+а отчёт читается тем, что читает их ответ. Источник выбирается: наш `serp` (по умолчанию) или сам Arsenkin.
+
+```bash
+wf top --input top.json --source serp --json          # наш serp search
+wf top --input top.json --source arsenkin --json      # их задача check-top
+```
+
+```json
+{"tools_name": "check-top",
+ "data": {"queries": ["ремонт киа"], "se": [{"type": 1, "region": 213}, {"type": 11, "region": 1011969}],
+          "depth": 10, "is_snippet": true, "noreask": false}}
+```
+
+Ответ: `result.request` (эхо, `se` → `ss`), `result.result.collect[запрос][se]` — URL в порядке выдачи, плюс наша
+сводка `summary`: `urls_total`, `top_n` и `top` — URL по силе (`(depth - позиция + 1)/depth`, нормировано на число
+запросов × ПС), с `queries_count`, `appearances`, `best_position`, `by_query`.
+
+Движок, который источник не умеет (YouTube, коды 20/21), — не ошибка: список пуст, а его индекс назван в `skipped`.
+
 ## Ключи и прокси
 
 `credentials.binding(service)` выбирает бэкенд по месту запуска, а не по воркфлоу:

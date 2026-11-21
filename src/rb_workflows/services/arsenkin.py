@@ -19,8 +19,10 @@ __all__ = ["BASE", "REGIONS", "collect"]
 BASE = "https://arsenkin.ru/api/tools"
 # What `--engine` names, as Arsenkin calls the region.
 REGIONS = {"msk": "msk", "gru": "gru"}
-# The task statuses that mean "wait"; anything else is either the result or a failure we report as is.
-PENDING = frozenset({"queue", "process", "processing", "wait"})
+# The statuses the service actually sends, split by meaning: anything not named here is "still working", because a
+# status nobody expected must not be read as a result (live: `starting` came back where the docs show `process`).
+DONE = frozenset({"finish", "finished", "done", "complete", "completed"})
+FAILED = frozenset({"error", "fail", "failed", "cancel", "cancelled", "canceled", "deny", "denied"})
 
 
 class ArsenkinError(RuntimeError):
@@ -66,6 +68,57 @@ async def _post(client: httpx.AsyncClient, token: str, path: str, body: dict) ->
     return payload
 
 
+async def collect_top(
+    client: httpx.AsyncClient,
+    token: str,
+    data: dict,
+    *,
+    poll_interval: float = 15.0,
+    timeout: float = 3600.0,
+) -> dict:
+    """Their `check-top` task: the same set → check → get dance, the answer already in Arsenkin's own shape.
+
+    `data` is the documented object (`queries`, `se`, `depth`, `is_snippet`, `noreask`); the result is returned as the
+    service sends it — `{"result": {"request": …, "result": {"collect": …}}, "task_id": …}` — so the caller decides what
+    to keep. Raises `ArsenkinError` for every refusal, as `collect` does.
+    """
+    body = {
+        "tools_name": "check-top",
+        "data": {
+            "queries": list(data["queries"]),
+            "is_snippet": bool(data.get("is_snippet")),
+            "noreask": bool(data.get("noreask")),
+            "se": [{"type": entry["type"], "region": entry["region"]} for entry in data["se"]],
+            "depth": int(data["depth"]),
+        },
+    }
+    started = await _post(client, token, "set", body)
+    task_id = started.get("task_id")
+    if task_id is None:
+        raise ArsenkinError(f"no task_id in the answer: {started}")
+    await _wait(client, token, task_id, poll_interval=poll_interval, timeout=timeout)
+    payload = await _post(client, token, "get", {"task_id": task_id})
+    payload.setdefault("task_id", task_id)
+    return payload
+
+
+async def _wait(client: httpx.AsyncClient, token: str, task_id: object, *, poll_interval: float, timeout: float) -> str:
+    """Poll `check` until the status leaves the pending set; returns it. Raises for a failure or a timeout."""
+    waited = 0.0
+    while True:
+        status = await _post(client, token, "check", {"task_id": task_id})
+        state = str(status.get("status") or "").lower()
+        if state in DONE or state in FAILED:
+            break
+        if waited >= timeout:
+            raise ArsenkinError(f"task {task_id} still '{state}' after {timeout:g} s")
+        await asyncio.sleep(poll_interval)
+        waited += poll_interval
+    if state not in DONE:
+        raise ArsenkinError(f"task {task_id} ended as '{state}': {status.get('msg') or status}")
+    return state
+
+
 async def collect(
     client: httpx.AsyncClient,
     token: str,
@@ -102,18 +155,7 @@ async def collect(
         raise ArsenkinError(f"no task_id in the answer: {started}")
     cost = started.get("cost")
 
-    waited = 0.0
-    while True:
-        status = await _post(client, token, "check", {"task_id": task_id})
-        state = str(status.get("status") or "").lower()
-        if state not in PENDING:
-            break
-        if waited >= timeout:
-            raise ArsenkinError(f"task {task_id} still '{state}' after {timeout:g} s")
-        await asyncio.sleep(poll_interval)
-        waited += poll_interval
-    if state not in {"finish", "finished", "done", "complete", "completed"}:
-        raise ArsenkinError(f"task {task_id} ended as '{state}': {status.get('msg') or status}")
+    await _wait(client, token, task_id, poll_interval=poll_interval, timeout=timeout)
 
     payload = await _post(client, token, "get", {"task_id": task_id})
     result = payload.get("result") or {}

@@ -31,6 +31,12 @@
 `Σ (top - pos + 1)/top` по попаданиям, делённое на число запросов × ПС; топ-10. Упавший запрос — запись с
 `ok: false`, пачка продолжается. Python: `await rb_workflows.serp.collect(...)`.
 
+## `wf top`
+
+Вход/выход — Arsenkin `check-top`; источник `--source serp|arsenkin` (по умолчанию serp). `collect[query][se]` —
+URL в порядке выдачи; `summary.top` — URL по силе. Неподдерживаемый движок (YouTube) даёт пустой список и индекс
+в `skipped`, не ошибку. Arsenkin-статусы: известные «готово»/«провал», всё остальное (`starting`, `process`) — ждём.
+
 ## Ключи
 
 `credentials.binding(service)` выбирает бэкенд по месту запуска: Windmill-ресурс (`WM_TOKEN`) → 9router

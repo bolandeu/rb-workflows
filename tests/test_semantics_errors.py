@@ -36,8 +36,8 @@ def _answers(routes: Mapping[str, Any]) -> Callable[[httpx.Request], httpx.Respo
         if isinstance(answer, httpx.Response):
             return answer
         if callable(answer):
-            made: httpx.Response = answer()
-            return made
+            made = answer()
+            return made if isinstance(made, httpx.Response) else httpx.Response(200, json=made)
         return httpx.Response(200, json=answer)
 
     return handler
@@ -127,6 +127,27 @@ async def test_the_result_list_may_come_as_a_list_not_a_mapping() -> None:
         found = await arsenkin.collect(client, "t", "https://a.example/", poll_interval=0)
     assert [(query["phrase"], query["position"]) for query in found["queries"]] == [("диван", 2)]
 
+
+async def test_an_unexpected_status_keeps_waiting_instead_of_reading_a_result() -> None:
+    """Live the service answers `starting` where the docs show `process`: a status nobody named is still "working"."""
+    states = iter(["starting", "process", "finish"])
+    routes = {
+        "set": {"code": "SET_TASK_OK", "task_id": 9},
+        "check": lambda: {"code": "TASK_STATUS", "status": next(states)},
+        "get": {"code": "TASK_RESULT", "result": {"result": {"1": {"word": "диван", "ws": 1, "pos": 1}}}},
+    }
+    async with _client(_answers(routes)) as client:
+        found = await arsenkin.collect(client, "t", "https://a.example/", poll_interval=0, timeout=1)
+    assert found["queries"][0]["phrase"] == "диван"
+
+async def test_a_status_nobody_named_times_out_rather_than_passing_as_a_result() -> None:
+    routes = {
+        "set": {"code": "SET_TASK_OK", "task_id": 9},
+        "check": {"code": "TASK_STATUS", "status": "quantum"},
+    }
+    async with _client(_answers(routes)) as client:
+        with pytest.raises(arsenkin.ArsenkinError, match="still 'quantum' after 0 s"):
+            await arsenkin.collect(client, "t", "https://a.example/", poll_interval=0, timeout=0)
 
 # --- the wrapper: one bad URL never takes the batch down ---------------------------------------
 
