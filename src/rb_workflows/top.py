@@ -18,13 +18,16 @@ the task is collected. On top of the contract the report carries `summary`: the 
 
 from __future__ import annotations
 
+import asyncio
 import time
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
+from pathlib import Path
 
 import httpx
 
 from . import serp as serp_source
+from . import tasks
 from .credentials import binding
 from .services import arsenkin
 
@@ -250,3 +253,127 @@ def summary(
 
     rows.sort(key=rank)
     return {"rows_total": len(rows), "top_n": top_n, "top": rows[:top_n]}
+
+
+# --- a task that outlives the call -------------------------------------------------------------------------------
+# Both sources can be slow, so the caller may place the work and come back: `submit` answers with an id at once,
+# `poll` answers with a state or the report. The source of truth about a running task is its own: our worker process
+# for `serp`, the Arsenkin task for `arsenkin` — the local file only remembers which one to ask.
+
+SLEEP = 2.0  # seconds between polls inside `wait`
+
+
+async def set_remote(data: Mapping, *, token: str | None = None) -> int:
+    """Place the task with Arsenkin and return their id."""
+    secret = token or binding("arsenkin")[0]
+    if not secret:
+        raise RuntimeError("no token for 'arsenkin': `token set arsenkin`")
+    async with httpx.AsyncClient(timeout=60.0, trust_env=False) as client:
+        return await arsenkin.set_task(client, secret, dict(data))
+
+
+async def remote_state(remote_id: int, *, token: str | None = None) -> dict:
+    """Arsenkin's own view of the task (`status`, `progress`)."""
+    secret = token or binding("arsenkin")[0]
+    if not secret:
+        raise RuntimeError("no token for 'arsenkin': `token set arsenkin`")
+    async with httpx.AsyncClient(timeout=60.0, trust_env=False) as client:
+        return await arsenkin.task_state(client, secret, remote_id)
+
+
+async def remote_result(remote_id: int, *, token: str | None = None) -> dict:
+    secret = token or binding("arsenkin")[0]
+    if not secret:
+        raise RuntimeError("no token for 'arsenkin': `token set arsenkin`")
+    async with httpx.AsyncClient(timeout=60.0, trust_env=False) as client:
+        return await arsenkin.task_result(client, secret, remote_id)
+
+
+async def submit(
+    request: Mapping,
+    *,
+    source: str = "serp",
+    tasks_dir: Path | None = None,
+    token: str | None = None,
+    **kwargs: object,
+) -> dict:
+    """Place the work and answer at once: `task_id`, the state, and the call that reads the result later.
+
+    `serp` is started as a detached worker of this CLI (it outlives the call), `arsenkin` only records their task id —
+    the service is already doing the work. Either way the caller gets the same three things.
+    """
+    if source not in SOURCE_NAMES:
+        raise ValueError(f"unknown source '{source}'; known: {', '.join(SOURCE_NAMES)}")
+    data = normalise(request)
+    task_id = tasks.new_id()
+    record: dict = {"task_id": task_id, "kind": "top", "source": source, "state": "running", "request": data}
+    if source == "arsenkin":
+        record["remote_task_id"] = await set_remote(data, token=token)
+        tasks.write(record, tasks_dir)
+    else:
+        record["args"] = kwargs
+        tasks.write(record, tasks_dir)
+        tasks.spawn(task_id, tasks_dir)
+    return {
+        "ok": True,
+        "task_id": task_id,
+        "source": source,
+        "state": "running",
+        "poll_after_s": 15,
+        "poll": f"wf top --task {task_id} --json",
+    }
+
+
+async def poll(task_id: str, *, tasks_dir: Path | None = None, token: str | None = None) -> dict:
+    """The state of a task, or its report once it is done. A failed task is `ok: false` with its error."""
+    record = tasks.read(task_id, tasks_dir)
+    state = record.get("state")
+    if state == "done":
+        return {**record["report"], "state": "done", "task_id": task_id}
+    if state == "error":
+        return {"ok": False, "state": "error", "task_id": task_id, "error": record.get("error")}
+    if record.get("source") == "arsenkin" and record.get("remote_task_id"):
+        status = await remote_state(int(record["remote_task_id"]), token=token)
+        remote = str(status.get("status") or "").lower()
+        if remote in arsenkin.DONE:
+            answer = await remote_result(int(record["remote_task_id"]), token=token)
+            collect_rows = _truncate(
+                (answer.get("result") or {}).get("result", {}).get("collect") or [], record["request"]["depth"]
+            )
+            report = build_report(
+                request=record["request"], source="arsenkin", collect=collect_rows, task_id=record["remote_task_id"]
+            )
+            tasks.update(task_id, tasks_dir, state="done", report=report)
+            return {**report, "state": "done", "task_id": task_id}
+        if remote in arsenkin.FAILED:
+            error = f"arsenkin task {record['remote_task_id']} ended as '{remote}': {status.get('msg') or ''}".strip()
+            tasks.update(task_id, tasks_dir, state="error", error=error)
+            return {"ok": False, "state": "error", "task_id": task_id, "error": error}
+        return {
+            "ok": True,
+            "state": "process",
+            "task_id": task_id,
+            "progress": status.get("progress"),
+            "retry_after_s": 15,
+        }
+    return {"ok": True, "state": "running", "task_id": task_id, "retry_after_s": 15}
+
+
+async def wait(task_id: str, *, tasks_dir: Path | None = None, poll_interval: float | None = None) -> dict:
+    """Poll until the task is done or failed; for the caller that wants one blocking call."""
+    step = SLEEP if poll_interval is None else poll_interval
+    while True:
+        answer = await poll(task_id, tasks_dir=tasks_dir)
+        if answer.get("state") in {"done", "error"}:
+            return answer
+        await asyncio.sleep(step)
+
+
+def run_task(task_id: str, *, tasks_dir: Path | None = None) -> None:
+    """The worker body: run the task's job and store the report (or the error) in its file."""
+    record = tasks.read(task_id, tasks_dir)
+    try:
+        report = asyncio.run(collect(record["request"], source=record["source"], **(record.get("args") or {})))
+        tasks.update(task_id, tasks_dir, state="done", report=report)
+    except Exception as exc:  # the worker must leave a readable state, not die with a traceback in a log
+        tasks.update(task_id, tasks_dir, state="error", error=f"{type(exc).__name__}: {exc}"[:400])

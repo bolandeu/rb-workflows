@@ -68,6 +68,41 @@ async def _post(client: httpx.AsyncClient, token: str, path: str, body: dict) ->
     return payload
 
 
+async def set_task(client: httpx.AsyncClient, token: str, data: dict) -> int:
+    """Place a `check-top` task and return its id (the service's own id, which outlives this process)."""
+    body = _top_body(data)
+    started = await _post(client, token, "set", body)
+    task_id = started.get("task_id")
+    if task_id is None:
+        raise ArsenkinError(f"no task_id in the answer: {started}")
+    return int(task_id)
+
+
+def _top_body(data: dict) -> dict:
+    return {
+        "tools_name": "check-top",
+        "data": {
+            "queries": list(data["queries"]),
+            "is_snippet": bool(data.get("is_snippet")),
+            "noreask": bool(data.get("noreask")),
+            "se": [{"type": entry["type"], "region": entry["region"]} for entry in data["se"]],
+            "depth": int(data["depth"]),
+        },
+    }
+
+
+async def task_state(client: httpx.AsyncClient, token: str, task_id: int) -> dict:
+    """The raw `check` answer: `{"status": "process"|"starting"|"finish"|…, "progress": n}`."""
+    return await _post(client, token, "check", {"task_id": task_id})
+
+
+async def task_result(client: httpx.AsyncClient, token: str, task_id: int) -> dict:
+    """The raw `get` answer of a finished task."""
+    payload = await _post(client, token, "get", {"task_id": task_id})
+    payload.setdefault("task_id", task_id)
+    return payload
+
+
 async def collect_top(
     client: httpx.AsyncClient,
     token: str,
@@ -82,17 +117,7 @@ async def collect_top(
     service sends it — `{"result": {"request": …, "result": {"collect": …}}, "task_id": …}` — so the caller decides what
     to keep. Raises `ArsenkinError` for every refusal, as `collect` does.
     """
-    body = {
-        "tools_name": "check-top",
-        "data": {
-            "queries": list(data["queries"]),
-            "is_snippet": bool(data.get("is_snippet")),
-            "noreask": bool(data.get("noreask")),
-            "se": [{"type": entry["type"], "region": entry["region"]} for entry in data["se"]],
-            "depth": int(data["depth"]),
-        },
-    }
-    started = await _post(client, token, "set", body)
+    started = await _post(client, token, "set", _top_body(data))
     task_id = started.get("task_id")
     if task_id is None:
         raise ArsenkinError(f"no task_id in the answer: {started}")

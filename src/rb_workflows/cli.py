@@ -60,7 +60,12 @@ def _parser() -> argparse.ArgumentParser:
     sem.add_argument("--poll-interval", type=float, default=15.0, help="seconds between status checks")
     sem.add_argument("--json", action="store_true", help="the report as JSON (the contract)")
     top_cmd = sub.add_parser("top", help="positions in Arsenkin's check-top shape, from our serp or from Arsenkin")
-    top_cmd.add_argument("--input", required=True, help="JSON file with the check-top body (or the bare data object)")
+    top_cmd.add_argument("--input", help="JSON file with the check-top body (or the bare data object)")
+    top_cmd.add_argument("--submit", action="store_true", help="place the task and answer with its id at once")
+    top_cmd.add_argument("--task", metavar="ID", help="read a submitted task: its state, or the report when it is done")
+    top_cmd.add_argument("--wait", action="store_true", help="with --task: block until the task finishes")
+    top_cmd.add_argument("--run", metavar="ID", help=argparse.SUPPRESS)  # the detached worker of --submit
+    top_cmd.add_argument("--tasks-dir", help="where the task files live (default: the user state dir)")
     top_cmd.add_argument("--source", default="serp", choices=("serp", "arsenkin"), help="who answers (default: serp)")
     top_cmd.add_argument("--top-n", type=int, default=10, help="rows of the strength summary to show")
     top_cmd.add_argument("--concurrency", type=int, default=3, help="queries in flight at once (source=serp)")
@@ -71,19 +76,6 @@ def _parser() -> argparse.ArgumentParser:
         "--poll-interval", type=float, default=15.0, help="seconds between status checks (source=arsenkin)"
     )
     top_cmd.add_argument("--json", action="store_true", help="the report as JSON (the contract)")
-    serp_cmd = sub.add_parser(
-        "serp", help="positions in Yandex/Google for a batch of queries, plus the cluster summary"
-    )
-    serp_cmd.add_argument("--queries", nargs="+", required=True, help="any number of queries; each is one serp call")
-    serp_cmd.add_argument("--engine", default="both", choices=("yandex", "google", "both"), help="search engine(s)")
-    serp_cmd.add_argument("--top", type=int, default=20, help="results per query (10..100)")
-    serp_cmd.add_argument("--concurrency", type=int, default=3, help="queries in flight at once")
-    serp_cmd.add_argument("--provider", help="provider queue of serp: xmlriver,xmlstock")
-    serp_cmd.add_argument("--cache", action="store_true", help="take the answer from the serp journal when possible")
-    serp_cmd.add_argument("--max-age", help="with --cache: the oldest journal answer to accept, e.g. 7d")
-    serp_cmd.add_argument("--yandex-lr", type=int, help="Yandex region code (lr)")
-    serp_cmd.add_argument("--google-loc", help="Google location criteria id")
-    serp_cmd.add_argument("--json", action="store_true", help="the report as JSON (the contract)")
     go = sub.add_parser("run", help="run one workflow")
     go.add_argument("workflow", choices=sorted(WORKFLOWS))
     go.add_argument("--input", help='JSON object with the workflow input, e.g. {"urls": ["https://example.com"]}')
@@ -100,7 +92,6 @@ BARE_HELP = """Usage: wf COMMAND
 Commands:
   run       run one workflow
   semantics  a keyword set for one URL or a batch, from an external service
-  serp       positions in Yandex/Google for a batch of queries, plus the cluster summary
   top        positions in Arsenkin's check-top shape, from our serp or from Arsenkin
   doctor    readiness of this machine: keys, proxies, the workflow engine
   auth      credentials of the services
@@ -176,6 +167,19 @@ DESCRIBE = {
                 ],
             },
             {
+                "name": "top",
+                "description": "positions in Arsenkin's check-top shape, from our serp or from Arsenkin",
+                "options": [
+                    _param("--input", "path"),
+                    _param("--source", "choice", "serp"),
+                    _param("--top-n", "int", 10),
+                    _param("--concurrency", "int", 3),
+                    _param("--timeout", "float", 3600.0),
+                    _param("--poll-interval", "float", 15.0),
+                    _JSON_OPTION,
+                ],
+            },
+            {
                 "name": "serp",
                 "description": "positions in Yandex/Google for a batch of queries, plus the cluster summary",
                 "options": [
@@ -233,8 +237,6 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "semantics":
         return _semantics(args)
-    if args.command == "serp":
-        return _serp(args)
     if args.command == "top":
         return _top(args)
     if args.command == "doctor":
@@ -273,7 +275,106 @@ def _top(args: argparse.Namespace) -> int:
 
     from . import top as top_source
 
+    tasks_dir = Path(args.tasks_dir) if args.tasks_dir else None
+    if args.run:
+        top_source.run_task(args.run, tasks_dir=tasks_dir)
+        return 0
+    if args.task:
+        answer = asyncio.run(
+            top_source.wait(args.task, tasks_dir=tasks_dir)
+            if args.wait
+            else top_source.poll(args.task, tasks_dir=tasks_dir)
+        )
+        if args.json:
+            print(json.dumps(answer, ensure_ascii=False))
+        else:
+            print(f"{args.task}: {answer.get('state')}")
+        return 0 if answer.get("ok") and answer.get("state") != "error" else 1
+    if not args.input:
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "error": {
+                        "code": "INVALID_ARGUMENTS",
+                        "message": "nothing to do: pass --input (to run or submit) or --task ID (to read a submitted task)",
+                    },
+                },
+                ensure_ascii=False,
+            )
+        )
+        raise SystemExit(2)
     request = json.loads(Path(args.input).read_text(encoding="utf-8"))
+    if args.submit:
+        answer = asyncio.run(top_source.submit(request, source=args.source, tasks_dir=tasks_dir))
+        if args.json:
+            print(json.dumps(answer, ensure_ascii=False))
+        else:
+            print(f"{answer['task_id']}: {answer['state']}; {answer['poll']}")
+        return 0
+    report = asyncio.run(
+        top_source.collect(
+            request,
+            source=args.source,
+            concurrency=args.concurrency,
+            poll_interval=args.poll_interval,
+            timeout=args.timeout,
+            top_n=args.top_n,
+        )
+    )
+    if args.json:
+        print(json.dumps(report, ensure_ascii=False))
+        return 0 if report["ok"] else 1
+    collect = report["result"]["result"]["collect"]
+    for query, per_se in zip(report["result"]["request"]["queries"], collect, strict=True):
+        print(f"{query}: " + ", ".join(f"{len(urls)} urls" for urls in per_se))
+    for row in report["summary"]["top"]:
+        print(f"{row['strength']:.3f}  {row['url']}  (best {row['best_position']}, queries {row['queries_count']})")
+    return 0 if report["ok"] else 1
+
+
+def _top(args: argparse.Namespace) -> int:
+    from pathlib import Path
+
+    from . import top as top_source
+
+    tasks_dir = Path(args.tasks_dir) if args.tasks_dir else None
+    if args.run:
+        top_source.run_task(args.run, tasks_dir=tasks_dir)
+        return 0
+    if args.task:
+        answer = asyncio.run(
+            top_source.wait(args.task, tasks_dir=tasks_dir)
+            if args.wait
+            else top_source.poll(args.task, tasks_dir=tasks_dir)
+        )
+        if args.json:
+            print(json.dumps(answer, ensure_ascii=False))
+        else:
+            print(f"{args.task}: {answer.get('state')}")
+        return 0 if answer.get("ok") and answer.get("state") != "error" else 1
+    if not args.input:
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "error": {
+                        "code": "INVALID_ARGUMENTS",
+                        "message": "nothing to do: pass --input (to run or submit) or --task ID (to read a submitted task)",
+                    },
+                },
+                ensure_ascii=False,
+            )
+        )
+        raise SystemExit(2)
+    request = json.loads(Path(args.input).read_text(encoding="utf-8"))
+    if args.submit:
+        answer = asyncio.run(top_source.submit(request, source=args.source, tasks_dir=tasks_dir))
+        if args.json:
+            print(json.dumps(answer, ensure_ascii=False))
+        else:
+            print(f"{answer['task_id']}: {answer['state']}; {answer['poll']}")
+        return 0
     report = asyncio.run(
         top_source.collect(
             request,
