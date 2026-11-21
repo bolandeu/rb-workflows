@@ -183,6 +183,7 @@ def _parser() -> argparse.ArgumentParser:
     word.add_argument("--provider", help="with --source wordstat: the provider queue, e.g. xmlriver,xmlstock")
     word.add_argument("--cache", action="store_true", help="with --source wordstat: take the answer from the journal")
     word.add_argument("--max-age", help="with --cache: the oldest journal answer to accept, e.g. 7d")
+    word.add_argument("--concurrency", type=int, default=5, help="queries in flight at once (source=wordstat, type 2)")
     word.add_argument("--timeout", type=float, default=3600.0, help="seconds the whole task may take (source=arsenkin)")
     word.add_argument(
         "--poll-interval", type=float, default=15.0, help="seconds between status checks (source=arsenkin)"
@@ -356,6 +357,7 @@ DESCRIBE = {
                     _param("--provider", "str"),
                     _param("--cache", "boolean", False),
                     _param("--max-age", "str"),
+                    _param("--concurrency", "int", 5),
                     _param("--timeout", "float", 3600.0),
                     _param("--poll-interval", "float", 15.0),
                     _JSON_OPTION,
@@ -633,6 +635,7 @@ def _wordstat(args: argparse.Namespace) -> int:
             provider=args.provider,
             cache=args.cache,
             max_age=args.max_age,
+            concurrency=args.concurrency,
             poll_interval=args.poll_interval,
             timeout=args.timeout,
         )

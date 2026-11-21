@@ -165,20 +165,34 @@ def _need_device(data: Mapping) -> None:
         raise ValueError(f"device '{data['device']}' is not supported by our wordstat CLI: only all devices ('')")
 
 
-def _frequencies(
-    data: Mapping, *, provider: str | None, cache: bool, max_age: str | None
+async def _frequencies(
+    data: Mapping, *, provider: str | None, cache: bool, max_age: str | None, concurrency: int
 ) -> tuple[dict[str, dict[str, dict[str, int]]], str | None]:
-    """`{query: {region: {arsenkin kind: value}}}` plus a warning for a region that failed; never an exception."""
+    """`{query: {region: {arsenkin kind: value}}}` plus a warning for a region that failed; never an exception.
+
+    One call per region, `concurrency` of them in flight: our CLI takes the whole batch of phrases in one call, so the
+    region is the unit of work.
+    """
     wanted = [WS_TO_CLI[name] for name in data["ws"]]
     found: dict[str, dict[str, dict[str, int]]] = {query: {} for query in data["queries"]}
-    warnings = []
-    for region in data["regions"]:
-        try:
-            payload = _search(data["queries"], wanted, region, provider=provider, cache=cache, max_age=max_age)
-        except RuntimeError as exc:  # one region failed: the rest of the task is still worth having
-            warnings.append(f"region {region}: {exc}"[:300])
+    gate = asyncio.Semaphore(max(1, concurrency))
+
+    async def one(region: int) -> tuple[int, dict | None, str | None]:
+        async with gate:
+            try:
+                answer = await asyncio.to_thread(
+                    _search, data["queries"], wanted, region, provider=provider, cache=cache, max_age=max_age
+                )
+            except RuntimeError as exc:  # one region failed: the rest of the task is still worth having
+                return region, None, str(exc)[:300]
+        return region, answer, None
+
+    warning = None
+    for region, answer, error in await asyncio.gather(*(one(region) for region in data["regions"])):
+        if answer is None:
+            warning = warning or f"region {region}: {error}"
             continue
-        for item in payload.get("results") or []:
+        for item in answer.get("results") or []:
             query = str(item.get("query"))
             value = item.get("total_value")
             frequency = found.setdefault(query, {}).setdefault(str(region), {})
@@ -186,24 +200,39 @@ def _frequencies(
             name = CLI_TO_WS.get(str(item.get("freq_type")).replace("_", "-"))
             if name is not None and name in data["ws"] and isinstance(value, int):
                 frequency[name] = value
-    return found, (warnings[0] if warnings else None)
+    return found, warning
 
 
-def _phrases(data: Mapping, *, provider: str | None, cache: bool, max_age: str | None) -> tuple[list[dict], str | None]:
-    """One row per query: its broad frequency, the similar phrases (left) and the associations (right)."""
-    rows = []
-    warning = None
-    for query in data["queries"]:
-        try:
-            payload = _search([query], ["broad"], data["region"], provider=provider, cache=cache, max_age=max_age)
-        except RuntimeError as exc:  # a failed query is a value: the batch goes on
-            warning = warning or str(exc)[:300]
-            rows.append({"freq": None, "left": {}, "right": {}})
-            continue
-        item = (payload.get("results") or [{}])[0]
+async def _phrases(
+    data: Mapping, *, provider: str | None, cache: bool, max_age: str | None, concurrency: int
+) -> tuple[list[dict], str | None]:
+    """One row per query — its broad frequency, the similar phrases (left), the associations (right).
+
+    A query is one call of our CLI, so `concurrency` queries are in flight at once: that is what makes a batch of a few
+    hundred phrases take minutes instead of an hour. A failed query is a row with `freq: null` and a warning.
+    """
+    gate = asyncio.Semaphore(max(1, concurrency))
+
+    async def one(query: str) -> tuple[dict | None, str | None]:
+        async with gate:
+            try:
+                answer = await asyncio.to_thread(
+                    _search, [query], ["broad"], data["region"], provider=provider, cache=cache, max_age=max_age
+                )
+            except RuntimeError as exc:  # a failed query is a value: the batch goes on
+                return None, str(exc)[:300]
+        item = (answer.get("results") or [{}])[0]
         left = _column(item.get("popular") or [], data)
         right = _column(item.get("associations") or [], data) if data["is_right"] else {}
-        rows.append({"freq": item.get("total_value"), "left": left, "right": right})
+        return {"freq": item.get("total_value"), "left": left, "right": right}, None
+
+    rows = []
+    warning = None
+    for row, error in await asyncio.gather(*(one(query) for query in data["queries"])):
+        if row is None:
+            warning = warning or error
+            row = {"freq": None, "left": {}, "right": {}}
+        rows.append(row)
     return rows, warning
 
 
@@ -336,6 +365,7 @@ async def collect(
     provider: str | None = None,
     cache: bool = False,
     max_age: str | None = None,
+    concurrency: int = 5,
     poll_interval: float = 15.0,
     timeout: float = 3600.0,
 ) -> dict:
@@ -359,12 +389,12 @@ async def collect(
     _need_device(data)
     started = time.monotonic()
     if data["type"] == 1:
-        frequencies, warning = await asyncio.to_thread(
-            _frequencies, data, provider=provider, cache=cache, max_age=max_age
+        frequencies, warning = await _frequencies(
+            data, provider=provider, cache=cache, max_age=max_age, concurrency=concurrency
         )
         report = build_report(request=data, source=source, frequencies=frequencies, warning=warning)
     else:
-        rows, warning = await asyncio.to_thread(_phrases, data, provider=provider, cache=cache, max_age=max_age)
+        rows, warning = await _phrases(data, provider=provider, cache=cache, max_age=max_age, concurrency=concurrency)
         report = build_report(request=data, source=source, rows=rows, warning=warning)
     report["elapsed_s"] = round(time.monotonic() - started, 1)
     return report
