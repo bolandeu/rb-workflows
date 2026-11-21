@@ -287,7 +287,7 @@ def test_flags_build_the_same_body_the_input_file_carries(monkeypatch, capsys) -
             "20",
             "--is-snippet",
             "--json",
-        ]  # fmt: skip
+        ]
     )
 
     assert code == 0

@@ -51,7 +51,8 @@ def _parser() -> argparse.ArgumentParser:
     status_parser = auth_status.add_parser("status", help="where every service's key comes from (never the key)")
     status_parser.add_argument("--json", action="store_true", help="the report as JSON (the contract)")
     sem = sub.add_parser("semantics", help="a keyword set for one URL or a batch, from an external service")
-    sem.add_argument("--urls", nargs="+", required=True, help="URLs to collect for (each one is a task of the service)")
+    sem.add_argument("--urls", nargs="+", help="URLs to collect for (each one is a task of the service)")
+    sem.add_argument("--input", help="JSON file with Arsenkin's semantics body (or the bare data object)")
     sem.add_argument("--engine", default="msk", choices=("msk", "gru"), help="msk — Yandex Moscow, gru — Google Moscow")
     sem.add_argument("--service", default="arsenkin", help="which service answers (default: arsenkin)")
     sem.add_argument("--stopwords", help="comma-separated minus-words")
@@ -153,6 +154,7 @@ DESCRIBE = {
                 "options": [
                     _param("--input", "str"),
                     _param("--urls", "str", multiple=True),
+                    _param("--input", "path"),
                     _param("--budget-usd", "float"),
                     _param("--proxy", "str"),
                     _param("--steps", "str", multiple=True),
@@ -164,6 +166,7 @@ DESCRIBE = {
                 "description": "a keyword set for one URL or a batch, from an external service",
                 "options": [
                     _param("--urls", "str", multiple=True),
+                    _param("--input", "path"),
                     _param("--engine", "choice", "msk"),
                     _param("--service", "str", "arsenkin"),
                     _param("--stopwords", "str"),
@@ -463,9 +466,29 @@ def _top(args: argparse.Namespace) -> int:
 
 
 def _semantics(args: argparse.Namespace) -> int:
+    from pathlib import Path
+
+    from . import semantics as semantics_source
     from .semantics import MAX_CONCURRENT, collect
 
     words = [word.strip() for word in (args.stopwords or "").split(",") if word.strip()]
+    if args.input:
+        request = semantics_source.normalise(json.loads(Path(args.input).read_text(encoding="utf-8")))
+    elif args.urls:
+        request = semantics_source.normalise(
+            {"queries": list(args.urls), "engine": args.engine, "stopwords": words, "urls": list(args.urls)}
+        )
+    else:
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "error": {"code": "INVALID_ARGUMENTS", "message": "nothing to collect: pass --urls or --input"},
+                },
+                ensure_ascii=False,
+            )
+        )
+        raise SystemExit(2)
     if args.submit:
         from pathlib import Path
 
@@ -475,13 +498,9 @@ def _semantics(args: argparse.Namespace) -> int:
             tasks_module.submit(
                 "semantics",
                 {
-                    "urls": list(args.urls),
+                    **request,
                     "service": args.service,
-                    "engine": args.engine,
-                    "stopwords": words,
                     "concurrency": args.concurrency or 5,
-                    "timeout": args.timeout,
-                    "poll_interval": args.poll_interval,
                 },
                 store=tasks_module.default_store(Path(args.tasks_dir) if args.tasks_dir else None),
             )
@@ -492,15 +511,7 @@ def _semantics(args: argparse.Namespace) -> int:
             print(f"{answer['task_id']}: {answer['state']}; {answer['poll']}")
         return 0
     report = asyncio.run(
-        collect(
-            args.urls,
-            name=args.service,
-            region=args.engine,
-            stopwords=words,
-            concurrency=args.concurrency or MAX_CONCURRENT,
-            timeout=args.timeout,
-            poll_interval=args.poll_interval,
-        )
+        collect(request, name=args.service, concurrency=args.concurrency or MAX_CONCURRENT)
     )
     if args.json:
         print(json.dumps(report, ensure_ascii=False))

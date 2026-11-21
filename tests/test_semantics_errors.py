@@ -158,7 +158,9 @@ class _Fake:
     def __init__(self, answer: Callable[[str], dict]) -> None:
         self.answer = answer
 
-    async def collect(self, client, token, url, *, region="msk", stopwords=(), poll_interval=15.0, timeout=1800.0):
+    async def collect(
+        self, client, token, url, *, region="msk", stopwords=(), mode="url", poll_interval=15.0, timeout=1800.0
+    ):
         return self.answer(url)
 
 
@@ -258,7 +260,8 @@ def test_the_cli_exits_zero_when_every_url_succeeded(monkeypatch: pytest.MonkeyP
 def test_the_cli_exits_one_when_a_url_failed(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
     from rb_workflows import cli
 
-    async def fake_collect(urls, **kwargs):
+    async def fake_collect(request, **kwargs):
+        urls = request["queries"] if isinstance(request, dict) else list(request)
         return {
             "ok": False,
             "urls": [{"url": urls[0], "ok": False, "error": "boom"}],
@@ -281,3 +284,37 @@ def test_the_cli_refuses_an_unknown_engine_with_the_error_envelope(capsys) -> No
         cli.main(["semantics", "--urls", "https://a.example/", "--engine", "yandex"])
     assert exit_info.value.code == 2
     assert json.loads(capsys.readouterr().out)["error"]["code"] == "INVALID_ARGUMENTS"
+
+
+def test_semantics_accepts_arsenkins_own_body(monkeypatch, tmp_path, capsys) -> None:
+    """A task written for their API runs here unchanged: `tools_name`, `data`, `mode`, `queries`, `region`, `stopwords`."""
+    from rb_workflows import cli
+
+    seen: list[dict] = []
+
+    async def fake_collect(request, **kwargs):
+        seen.append(dict(request) if isinstance(request, dict) else {"urls": request})
+        return {"ok": True, "urls": [], "summary": [], "service": "fake", "region": "msk"}
+
+    body = {
+        "tools_name": "semantics",
+        "data": {
+            "mode": "domain",
+            "queries": ["altika.ru"],
+            "region": "gru",
+            "stopwords": ["киа"],
+        },
+    }
+    path = tmp_path / "semantics.json"
+    path.write_text(json.dumps(body), encoding="utf-8")
+    monkeypatch.setattr(semantics, "collect", fake_collect)
+
+    assert cli.main(["semantics", "--input", str(path), "--json"]) == 0
+    requested = seen[0]
+    assert requested["queries"] == ["altika.ru"]
+    assert (requested["mode"], requested["engine"], requested["stopwords"]) == ("domain", "gru", ["киа"])
+
+
+def test_an_unknown_semantics_mode_is_refused() -> None:
+    with pytest.raises(ValueError, match="unknown mode 'html'"):
+        semantics.normalise({"queries": ["a.ru"], "mode": "html"})

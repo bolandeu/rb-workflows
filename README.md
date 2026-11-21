@@ -52,6 +52,7 @@ wf run web-fetch --urls https://example.com --steps exa --proxy socks5://u:p@h:1
 
 ```bash
 wf semantics --urls https://site.ru/page --json
+wf semantics --input semantics.json --json                 # тело Arsenkin как есть (mode, queries, region, stopwords)
 wf semantics --urls https://site.ru/a https://site.ru/b --stopwords "купить,цена" --json
 wf semantics --urls https://site.ru/page --engine gru --service arsenkin --json
 ```

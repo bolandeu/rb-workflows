@@ -20,7 +20,33 @@ import httpx
 from .credentials import binding
 from .services import Service, service
 
-__all__ = ["RateLimiter", "collect", "summary"]
+__all__ = ["RateLimiter", "collect", "normalise", "summary"]
+
+MODES = ("url", "domain")
+
+def normalise(request: Mapping) -> dict:
+    """The job's request from Arsenkin's `semantics` body (or from the bare `data` object), validated.
+
+    Arsenkin's own keys are accepted as they are — `queries`, `region`, `stopwords`, `mode` — so a task written for
+    their API runs here unchanged. `queries` is what gets collected: URLs in `url` mode, a domain in `domain` mode.
+    """
+    raw = request.get("data")
+    data: Mapping = raw if isinstance(raw, Mapping) else request
+    queries = [str(item) for item in data.get("queries") or data.get("urls") or []]
+    if not queries:
+        raise ValueError("no queries: 'queries' (Arsenkin) or 'urls' must be a non-empty list")
+    mode = str(data.get("mode") or "url")
+    if mode not in MODES:
+        raise ValueError(f"unknown mode '{mode}'; known: {', '.join(MODES)}")
+    return {
+        "queries": queries,
+        "mode": mode,
+        "engine": str(data.get("engine") or data.get("region") or "msk"),
+        "stopwords": [str(word) for word in data.get("stopwords") or []],
+        "concurrency": int(data.get("concurrency") or MAX_CONCURRENT),
+        "timeout": float(data.get("timeout") or 1800.0),
+        "poll_interval": float(data.get("poll_interval") or 15.0),
+    }
 
 MAX_CONCURRENT = 5  # tasks at once, per the account's own limit
 PER_MINUTE = 30  # requests of any kind, per the account's own limit
@@ -66,11 +92,13 @@ async def _one(
     stopwords: tuple[str, ...],
     timeout: float,
     poll_interval: float,
+    mode: str = "url",
 ) -> dict:
     try:
         async with _LIMITER:
             found = await module.collect(
-                client, token, url, region=region, stopwords=stopwords, timeout=timeout, poll_interval=poll_interval
+                client, token, url, region=region, stopwords=stopwords, mode=mode, timeout=timeout,
+                poll_interval=poll_interval,
             )
         return {"ok": True, **found}
     except Exception as exc:  # a failed URL is a value: the batch goes on
@@ -133,6 +161,7 @@ async def _collect(
     timeout: float,
     poll_interval: float,
     token: str | None,
+    mode: str = "url",
 ) -> dict:
     """The batch itself: `concurrency` jobs in flight, one rate limiter, one summary.
 
@@ -168,8 +197,8 @@ async def _collect(
         async with gate:
             return await _one(
                 client, token, module, url,
-                region=region, stopwords=words, timeout=timeout, poll_interval=poll_interval,
-            )  # fmt: skip
+                region=region, stopwords=words, mode=mode, timeout=timeout, poll_interval=poll_interval,
+            )
 
     async with httpx.AsyncClient(timeout=60.0, trust_env=False) as client:
         documents = await asyncio.gather(*(run(url) for url in urls))

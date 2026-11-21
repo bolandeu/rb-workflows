@@ -156,6 +156,7 @@ async def collect(
     *,
     region: str = "msk",
     stopwords: Iterable[str] = (),
+    mode: str = "url",
     poll_interval: float = 15.0,
     timeout: float = 1800.0,
 ) -> dict:
@@ -178,7 +179,12 @@ async def collect(
     a missing `task_id`, a task that ended in a non-success status (the status name and the service's message go into
     the text) and a task that never left the pending state (`"still 'process' after N s"`).
     """
-    body = {"mode": "url", "queries": [url], "region": REGIONS.get(region, region), "stopwords": list(stopwords)}
+    body = {
+        "mode": mode,
+        "queries": [url],
+        "region": REGIONS.get(region, region),
+        "stopwords": list(stopwords),
+    }
     started = await _post(client, token, "set", {"tools_name": "semantics", "data": body})
     task_id = started.get("task_id")
     if task_id is None:

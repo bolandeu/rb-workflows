@@ -28,6 +28,7 @@ class Service(Protocol):
         *,
         region: str = "msk",
         stopwords: Iterable[str] = (),
+        mode: str = "url",
         poll_interval: float = 10.0,
         timeout: float = 1800.0,
     ) -> dict: ...

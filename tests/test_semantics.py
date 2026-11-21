@@ -20,7 +20,9 @@ class FakeService:
         self.answer = answer
         self.seen: list[str] = []
 
-    async def collect(self, client, token, url, *, region="msk", stopwords=(), poll_interval=10.0, timeout=1800.0):
+    async def collect(
+        self, client, token, url, *, region="msk", stopwords=(), mode="url", poll_interval=10.0, timeout=1800.0
+    ):
         self.seen.append(url)
         await asyncio.sleep(0.01)
         return self.answer(url)
