@@ -316,19 +316,7 @@ async def submit(
             "poll_after_s": 15,
             "poll": f"wf task {task_id} --json",
         }
-    task_id = tasks.new_id()
-    record: dict = {"task_id": task_id, "kind": "top", "source": source, "state": "running", "request": data}
-    record["args"] = kwargs
-    tasks.write(record, tasks_dir)
-    tasks.spawn(task_id, tasks_dir)
-    return {
-        "ok": True,
-        "task_id": task_id,
-        "source": source,
-        "state": "running",
-        "poll_after_s": 15,
-        "poll": f"wf task {task_id} --json",
-    }
+    return tasks.submit_local("top", {"request": data, **kwargs}, tasks_dir)
 
 
 async def poll(task_id: str, *, tasks_dir: Path | None = None, token: str | None = None) -> dict:
@@ -339,6 +327,7 @@ async def poll(task_id: str, *, tasks_dir: Path | None = None, token: str | None
     store, name = tasks.split_id(task_id)
     if store == "arsenkin":
         return await _poll_remote(int(name), token=token)
+    return tasks.poll_local(task_id, tasks_dir)
     record = tasks.read(task_id, tasks_dir)
     state = record.get("state")
     if state == "done":
@@ -432,13 +421,3 @@ async def wait(task_id: str, *, tasks_dir: Path | None = None, poll_interval: fl
         if answer.get("state") in {"done", "error"}:
             return answer
         await asyncio.sleep(step)
-
-
-def run_task(task_id: str, *, tasks_dir: Path | None = None) -> None:
-    """The worker body: run the task's job and store the report (or the error) in its file."""
-    record = tasks.read(task_id, tasks_dir)
-    try:
-        report = asyncio.run(collect(record["request"], source=record["source"], **(record.get("args") or {})))
-        tasks.update(task_id, tasks_dir, state="done", report=report)
-    except Exception as exc:  # the worker must leave a readable state, not die with a traceback in a log
-        tasks.update(task_id, tasks_dir, state="error", error=f"{type(exc).__name__}: {exc}"[:400])

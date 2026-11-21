@@ -111,7 +111,7 @@ def spawn(task_id: str, base: Path | None = None) -> int:
     directory = state_dir(base)
     directory.mkdir(parents=True, exist_ok=True)
     log = (directory / f"{task_id}.log").open("ab")
-    argv = [sys.executable, "-m", "rb_workflows.cli", "top", "--run", task_id]
+    argv = [sys.executable, "-m", "rb_workflows.cli", "task", "--run", task_id]
     if base is not None:
         argv += ["--tasks-dir", str(base)]
     process = subprocess.Popen(  # noqa: S603 - the command is ours, the id is generated here

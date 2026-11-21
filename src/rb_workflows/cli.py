@@ -289,10 +289,6 @@ def main(argv: list[str] | None = None) -> int:
     return 0 if result["ok"] else 1
 
 
-if __name__ == "__main__":  # pragma: no cover
-    raise SystemExit(main())
-
-
 def _tasks(args: argparse.Namespace) -> int:
     from pathlib import Path
 
@@ -376,121 +372,6 @@ def _top(args: argparse.Namespace) -> int:
     collect = report["result"]["result"]["collect"]
     for query, per_se in zip(report["result"]["request"]["queries"], collect, strict=True):
         print(f"{query}: " + ", ".join(f"{len(urls)} urls" for urls in per_se))
-    for row in report["summary"]["top"]:
-        print(f"{row['strength']:.3f}  {row['url']}  (best {row['best_position']}, queries {row['queries_count']})")
-    return 0 if report["ok"] else 1
-
-
-def _tasks(args: argparse.Namespace) -> int:
-    from pathlib import Path
-
-    from . import tasks as tasks_module
-
-    tasks_dir = Path(args.tasks_dir) if args.tasks_dir else None
-    if args.run:
-        tasks_module.run_task(args.run, tasks_dir)
-        return 0
-    if not args.id:
-        print(
-            json.dumps(
-                {"ok": False, "error": {"code": "INVALID_ARGUMENTS", "message": "nothing to read: pass --task ID"}},
-                ensure_ascii=False,
-            )
-        )
-        raise SystemExit(2)
-    answer = tasks_module.wait_local(args.id, tasks_dir) if args.wait else tasks_module.poll_local(args.id, tasks_dir)
-    if args.json:
-        print(json.dumps(answer, ensure_ascii=False))
-    else:
-        print(f"{args.id}: {answer.get('state')}")
-    return 0 if answer.get("ok") and answer.get("state") != "error" else 1
-
-
-def _top(args: argparse.Namespace) -> int:
-    from pathlib import Path
-
-    from . import top as top_source
-
-    tasks_dir = Path(args.tasks_dir) if args.tasks_dir else None
-    if args.run:
-        top_source.run_task(args.run, tasks_dir=tasks_dir)
-        return 0
-    if args.task:
-        answer = asyncio.run(
-            top_source.wait(args.task, tasks_dir=tasks_dir)
-            if args.wait
-            else top_source.poll(args.task, tasks_dir=tasks_dir)
-        )
-        if args.json:
-            print(json.dumps(answer, ensure_ascii=False))
-        else:
-            print(f"{args.id}: {answer.get('state')}")
-        return 0 if answer.get("ok") and answer.get("state") != "error" else 1
-    if not args.input:
-        print(
-            json.dumps(
-                {
-                    "ok": False,
-                    "error": {
-                        "code": "INVALID_ARGUMENTS",
-                        "message": "nothing to do: pass --input (to run or submit) or --task ID (to read a submitted task)",
-                    },
-                },
-                ensure_ascii=False,
-            )
-        )
-        raise SystemExit(2)
-    request = json.loads(Path(args.input).read_text(encoding="utf-8"))
-    if args.submit:
-        answer = asyncio.run(top_source.submit(request, source=args.source, tasks_dir=tasks_dir))
-        if args.json:
-            print(json.dumps(answer, ensure_ascii=False))
-        else:
-            print(f"{answer['task_id']}: {answer['state']}; {answer['poll']}")
-        return 0
-    report = asyncio.run(
-        top_source.collect(
-            request,
-            source=args.source,
-            concurrency=args.concurrency,
-            poll_interval=args.poll_interval,
-            timeout=args.timeout,
-            top_n=args.top_n,
-        )
-    )
-    if args.json:
-        print(json.dumps(report, ensure_ascii=False))
-        return 0 if report["ok"] else 1
-    collect = report["result"]["result"]["collect"]
-    for query, per_se in zip(report["result"]["request"]["queries"], collect, strict=True):
-        print(f"{query}: " + ", ".join(f"{len(urls)} urls" for urls in per_se))
-    for row in report["summary"]["top"]:
-        print(f"{row['strength']:.3f}  {row['url']}  (best {row['best_position']}, queries {row['queries_count']})")
-    return 0 if report["ok"] else 1
-
-
-def _serp(args: argparse.Namespace) -> int:
-    from . import serp as serp_source
-
-    report = asyncio.run(
-        serp_source.collect(
-            args.queries,
-            engine=args.engine,
-            top=args.top,
-            concurrency=args.concurrency,
-            provider=args.provider,
-            cache=args.cache,
-            max_age=args.max_age,
-            yandex_lr=args.yandex_lr,
-            google_loc=args.google_loc,
-        )
-    )
-    if args.json:
-        print(json.dumps(report, ensure_ascii=False))
-        return 0 if report["ok"] else 1
-    for entry in report["results"]:
-        state = f"{len(entry['rows'])} rows" if entry["ok"] else entry["error"]
-        print(f"{entry['query']} [{entry['serp_engine']}] — {state}")
     for row in report["summary"]["top"]:
         print(f"{row['strength']:.3f}  {row['url']}  (best {row['best_position']}, queries {row['queries_count']})")
     return 0 if report["ok"] else 1
@@ -596,3 +477,7 @@ Commands:
 """
 
 SERVICES = ("exa", "tavily")
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(main())
