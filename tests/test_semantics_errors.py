@@ -23,8 +23,10 @@ from rb_workflows.services import arsenkin
 def _client(handler: Callable[[httpx.Request], httpx.Response]) -> httpx.AsyncClient:
     return httpx.AsyncClient(transport=httpx.MockTransport(handler), trust_env=False)
 
+
 def _path(request: httpx.Request) -> str:
     return request.url.path.rsplit("/", 1)[-1]
+
 
 def _answers(routes: Mapping[str, Any]) -> Callable[[httpx.Request], httpx.Response]:
     """A transport that answers per endpoint from a table: a dict is JSON, a callable is called for its response."""
@@ -40,7 +42,9 @@ def _answers(routes: Mapping[str, Any]) -> Callable[[httpx.Request], httpx.Respo
 
     return handler
 
+
 # --- the service protocol: every refusal becomes one sentence ---------------------------------
+
 
 async def test_a_spent_rate_limit_is_retried_and_then_reported(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(arsenkin, "RATE_LIMIT_PAUSE", 0)
@@ -56,11 +60,13 @@ async def test_a_spent_rate_limit_is_retried_and_then_reported(monkeypatch: pyte
             await arsenkin.collect(client, "t", "https://a.example/")
     assert len(calls) == 3  # the tries are spent, not one silent attempt
 
+
 async def test_an_http_error_names_the_status_and_a_slice_of_the_body() -> None:
     answer = httpx.Response(500, text="upstream is down for maintenance")
     async with _client(lambda request: answer) as client:
         with pytest.raises(arsenkin.ArsenkinError, match=re.escape("HTTP 500 for /set: upstream is down for"[:20])):
             await arsenkin.collect(client, "t", "https://a.example/")
+
 
 async def test_a_service_level_error_code_is_reported_with_its_message() -> None:
     answer = httpx.Response(200, json={"code": "AUTH_ERROR", "msg": "token is revoked"})
@@ -68,11 +74,13 @@ async def test_a_service_level_error_code_is_reported_with_its_message() -> None
         with pytest.raises(arsenkin.ArsenkinError, match="AUTH_ERROR token is revoked"):
             await arsenkin.collect(client, "t", "https://a.example/")
 
+
 async def test_a_non_json_answer_is_a_service_error_not_a_traceback() -> None:
     answer = httpx.Response(200, text="<html>captcha</html>")
     async with _client(lambda request: answer) as client:
         with pytest.raises(arsenkin.ArsenkinError, match="not JSON"):
             await arsenkin.collect(client, "t", "https://a.example/")
+
 
 async def test_a_transport_failure_is_a_service_error_with_the_exception_name() -> None:
     def boom() -> httpx.Response:
@@ -82,10 +90,12 @@ async def test_a_transport_failure_is_a_service_error_with_the_exception_name() 
         with pytest.raises(arsenkin.ArsenkinError, match="ConnectError"):
             await arsenkin.collect(client, "t", "https://a.example/")
 
+
 async def test_a_task_without_an_id_is_reported_as_such() -> None:
     async with _client(lambda request: httpx.Response(200, json={"code": "SET_TASK_OK"})) as client:
         with pytest.raises(arsenkin.ArsenkinError, match="no task_id"):
             await arsenkin.collect(client, "t", "https://a.example/")
+
 
 async def test_a_task_that_ends_in_an_error_state_names_the_state() -> None:
     routes = {
@@ -96,6 +106,7 @@ async def test_a_task_that_ends_in_an_error_state_names_the_state() -> None:
         with pytest.raises(arsenkin.ArsenkinError, match=r"ended as 'error'.*site is down"):
             await arsenkin.collect(client, "t", "https://a.example/", poll_interval=0)
 
+
 async def test_a_task_that_never_finishes_times_out_with_the_last_state() -> None:
     routes = {
         "set": {"code": "SET_TASK_OK", "task_id": 5},
@@ -104,6 +115,7 @@ async def test_a_task_that_never_finishes_times_out_with_the_last_state() -> Non
     async with _client(_answers(routes)) as client:
         with pytest.raises(arsenkin.ArsenkinError, match="still 'process' after 0 s"):
             await arsenkin.collect(client, "t", "https://a.example/", poll_interval=0, timeout=0)
+
 
 async def test_the_result_list_may_come_as_a_list_not_a_mapping() -> None:
     routes = {
@@ -115,7 +127,9 @@ async def test_the_result_list_may_come_as_a_list_not_a_mapping() -> None:
         found = await arsenkin.collect(client, "t", "https://a.example/", poll_interval=0)
     assert [(query["phrase"], query["position"]) for query in found["queries"]] == [("диван", 2)]
 
+
 # --- the wrapper: one bad URL never takes the batch down ---------------------------------------
+
 
 class _Fake:
     def __init__(self, answer: Callable[[str], dict]) -> None:
@@ -123,6 +137,7 @@ class _Fake:
 
     async def collect(self, client, token, url, *, region="msk", stopwords=(), poll_interval=15.0, timeout=1800.0):
         return self.answer(url)
+
 
 def _doc(url: str, phrase: str, position: int | None) -> dict:
     return {
@@ -145,6 +160,7 @@ def _doc(url: str, phrase: str, position: int | None) -> dict:
         "toponims": [],
     }
 
+
 async def test_a_failed_url_is_recorded_with_the_exception_and_the_batch_goes_on(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -161,15 +177,18 @@ async def test_a_failed_url_is_recorded_with_the_exception_and_the_batch_goes_on
     assert report["urls"][1]["ok"] is True
     assert [row["phrase"] for row in report["summary"]] == ["диван"]  # the failed URL adds nothing
 
+
 async def test_an_unknown_service_is_reported_before_any_request() -> None:
     with pytest.raises(KeyError, match=r"unknown service 'nope'.*arsenkin"):
         await semantics.collect(["https://a.example/"], name="nope", token="t")
+
 
 async def test_a_missing_token_is_reported_with_the_command_that_fixes_it(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(services.SERVICES, "fake", _Fake(lambda url: _doc(url, "диван", 1)))
     monkeypatch.setattr(semantics, "binding", lambda service: (None, None))  # nothing stored, nothing on PATH
     with pytest.raises(RuntimeError, match=r"no token for 'fake'.*token set fake"):
         await semantics.collect(["https://a.example/"], name="fake")
+
 
 async def test_the_summary_ignores_failed_documents_but_counts_every_good_one() -> None:
     rows = semantics.summary(
@@ -190,29 +209,47 @@ async def test_the_summary_ignores_failed_documents_but_counts_every_good_one() 
         }
     ]
 
+
 # --- the CLI: exit codes tell the caller what happened -----------------------------------------
+
 
 def test_the_cli_exits_zero_when_every_url_succeeded(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
     from rb_workflows import cli
 
     async def fake_collect(urls, **kwargs):
-        return {"ok": True, "urls": [{"url": url, "ok": True, "queries": []} for url in urls], "summary": [],
-                "service": "fake", "region": "msk", "requests_waited_s": 0.0, "elapsed_s": 0.0}
+        return {
+            "ok": True,
+            "urls": [{"url": url, "ok": True, "queries": []} for url in urls],
+            "summary": [],
+            "service": "fake",
+            "region": "msk",
+            "requests_waited_s": 0.0,
+            "elapsed_s": 0.0,
+        }
 
     monkeypatch.setattr(semantics, "collect", fake_collect)
     assert cli.main(["semantics", "--urls", "https://a.example/", "--json"]) == 0
     assert json.loads(capsys.readouterr().out)["ok"] is True
 
+
 def test_the_cli_exits_one_when_a_url_failed(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
     from rb_workflows import cli
 
     async def fake_collect(urls, **kwargs):
-        return {"ok": False, "urls": [{"url": urls[0], "ok": False, "error": "boom"}], "summary": [],
-                "service": "fake", "region": "msk", "requests_waited_s": 0.0, "elapsed_s": 0.0}
+        return {
+            "ok": False,
+            "urls": [{"url": urls[0], "ok": False, "error": "boom"}],
+            "summary": [],
+            "service": "fake",
+            "region": "msk",
+            "requests_waited_s": 0.0,
+            "elapsed_s": 0.0,
+        }
 
     monkeypatch.setattr(semantics, "collect", fake_collect)
     assert cli.main(["semantics", "--urls", "https://a.example/", "--json"]) == 1
     assert json.loads(capsys.readouterr().out)["urls"][0]["error"] == "boom"
+
 
 def test_the_cli_refuses_an_unknown_engine_with_the_error_envelope(capsys) -> None:
     from rb_workflows import cli
