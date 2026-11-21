@@ -52,8 +52,12 @@ def _from_ninerouter(service: str, key: str | None) -> tuple[str | None, str | N
 def _from_token_cli(service: str) -> tuple[str | None, str | None]:
     """The generic token store of this machine: `token get <service>` (keychain, Doppler as the fallback)."""
     try:
-        found = subprocess.run(  # noqa: S603 — the CLI of this very machine, found on PATH
-            ["token", "get", service], capture_output=True, text=True, check=False, timeout=20
+        found = subprocess.run(
+            ["token", "get", service],  # noqa: S603, S607 — the CLI of this very machine, found on PATH
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=20,
         )
     except (OSError, subprocess.SubprocessError):
         return None, None
