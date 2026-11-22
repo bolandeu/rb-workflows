@@ -136,7 +136,7 @@ def _flag(value: object, default: bool = True) -> bool:
 def _search(
     queries: Iterable[str],
     kinds: Iterable[str],
-    region: int,
+    region: int | Iterable[int],
     *,
     provider: str | None,
     cache: bool,
@@ -145,7 +145,12 @@ def _search(
     limit: int | None = None,
 ) -> dict:
     """One `wordstat search` call for the whole batch of phrases in one region; the parsed JSON answer."""
-    argv = ["wordstat", "search", *queries, "--freq", ",".join(kinds), "--lr", str(region or RUSSIA)]
+    regions = (
+        str(region)
+        if not isinstance(region, Iterable) or isinstance(region, str)
+        else ",".join(str(code) for code in region)
+    )
+    argv = ["wordstat", "search", *queries, "--freq", ",".join(kinds), "--lr", regions or str(RUSSIA)]
     if device:
         argv += ["--device", device]
     if limit:
@@ -178,48 +183,37 @@ def _search(
 
 
 async def _frequencies(
-    data: Mapping, *, provider: str | None, cache: bool, max_age: str | None, concurrency: int
+    data: Mapping, *, provider: str | None, cache: bool, max_age: str | None
 ) -> tuple[dict[str, dict[str, dict[str, int]]], str | None]:
-    """`{query: {region: {arsenkin kind: value}}}` plus a warning for a region that failed; never an exception.
+    """`{query: {region: {arsenkin kind: value}}}` plus a warning when the batch failed; never an exception.
 
-    One call per region, `concurrency` of them in flight: our CLI takes the whole batch of phrases in one call, so the
-    region is the unit of work.
+    One call for every phrase and every region: our CLI loops the regions itself and labels each row with its own.
     """
     wanted = [WS_TO_CLI[name] for name in data["ws"]]
     found: dict[str, dict[str, dict[str, int]]] = {query: {} for query in data["queries"]}
-    gate = asyncio.Semaphore(max(1, concurrency))
-
-    async def one(region: int) -> tuple[int, dict | None, str | None]:
-        async with gate:
-            try:
-                answer = await asyncio.to_thread(
-                    _search,
-                    data["queries"],
-                    wanted,
-                    region,
-                    provider=provider,
-                    cache=cache,
-                    max_age=max_age,
-                    device=data["device"] or None,
-                )
-            except RuntimeError as exc:  # one region failed: the rest of the task is still worth having
-                return region, None, str(exc)[:300]
-        return region, answer, None
-
-    warning = None
-    for region, answer, error in await asyncio.gather(*(one(region) for region in data["regions"])):
-        if answer is None:
-            warning = warning or f"region {region}: {error}"
-            continue
-        for item in answer.get("results") or []:
-            query = str(item.get("query"))
-            value = item.get("total_value")
-            frequency = found.setdefault(query, {}).setdefault(str(region), {})
-            # our CLI spells `exact-ord` as `exact_ord` in the answer, whatever it accepted on the command line
-            name = CLI_TO_WS.get(str(item.get("freq_type")).replace("_", "-"))
-            if name is not None and name in data["ws"] and isinstance(value, int):
-                frequency[name] = value
-    return found, warning
+    try:
+        answer = await asyncio.to_thread(
+            _search,
+            data["queries"],
+            wanted,
+            data["regions"],
+            provider=provider,
+            cache=cache,
+            max_age=max_age,
+            device=data["device"] or None,
+        )
+    except RuntimeError as exc:  # the whole batch failed: the report still says what happened
+        return found, str(exc)[:300]
+    for item in answer.get("results") or []:
+        query = str(item.get("query"))
+        value = item.get("total_value")
+        region = item.get("region")
+        frequency = found.setdefault(query, {}).setdefault(str(region), {})
+        # our CLI spells `exact-ord` as `exact_ord` in the answer, whatever it accepted on the command line
+        name = CLI_TO_WS.get(str(item.get("freq_type")).replace("_", "-"))
+        if name is not None and name in data["ws"] and isinstance(value, int):
+            frequency[name] = value
+    return found, None
 
 
 async def _phrases(
@@ -423,9 +417,7 @@ async def collect(
         return report
     started = time.monotonic()
     if data["type"] == 1:
-        frequencies, warning = await _frequencies(
-            data, provider=provider, cache=cache, max_age=max_age, concurrency=concurrency
-        )
+        frequencies, warning = await _frequencies(data, provider=provider, cache=cache, max_age=max_age)
         report = build_report(request=data, source=source, frequencies=frequencies, warning=warning)
     else:
         rows, warning = await _phrases(data, provider=provider, cache=cache, max_age=max_age, concurrency=concurrency)

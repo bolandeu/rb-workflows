@@ -51,7 +51,8 @@ search`, группировка по пересечению URL: `hard` — не
 
 Arsenkin `wordstat`: `type` 1 — частоты (`queries`, `regions` до 4, `ws`, `device`), `type` 2 — парсинг фраз
 (`queries`, `region`, `minus_words`, `is_right`, `is_clear`, `is_clear_minus`). Источник `--source wordstat|arsenkin`.
-Наш CLI отдаёт один регион за вызов (Arsenkin — до 4); `--device` и `--limit` (`groupby` XMLStock) проброшены.
+Наш CLI принимает несколько регионов за вызов (`--lr 213,225`: каждый регион — свой платный запрос, ответ помечен
+регионом), `--device` и `--limit` (`groupby` XMLStock) проброшены.
 Имена частот:
 `base`→`broad`, `quoted`→`phrase`, `overal`→`exact`, `exact`→`exact-ord`. Фразы — это `broad`-ответ CLI: `popular` —
 левая колонка, `associations` — правая, минус-слова и «+» фильтруются локально.

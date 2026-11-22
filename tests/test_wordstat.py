@@ -37,14 +37,17 @@ def _fake_cli(monkeypatch, *, popular=None, associations=None) -> list[list[str]
         calls.append(list(argv))
         kinds = argv[argv.index("--freq") + 1].split(",")
         queries = argv[2 : argv.index("--freq")]
+        regions = [int(code) for code in argv[argv.index("--lr") + 1].split(",")]
         results = [
             {
                 "query": query,
                 "freq_type": kind,
                 "total_value": 100 if kind == "broad" else 7,
+                "region": region,
                 "popular": popular if popular is not None else [{"text": query, "value": 100}],
                 "associations": associations or [],
             }
+            for region in regions
             for query in queries
             for kind in kinds
         ]
@@ -89,7 +92,7 @@ def test_type_1_asks_our_cli_for_every_named_frequency_in_every_region(monkeypat
 
     report = _run(wordstat.collect(FREQUENCY, source="wordstat", cache=True))
 
-    assert [call[call.index("--lr") + 1] for call in calls] == ["213", "225"]
+    assert [call[call.index("--lr") + 1] for call in calls] == ["213,225"]  # one call, the CLI loops the regions
     assert calls[0][calls[0].index("--freq") + 1] == "broad,exact-ord"  # base is broad, exact is `[!фраза]`
     assert "--cache" in calls[0]
     numbers = report["result"]["data"]["result"]
@@ -254,7 +257,9 @@ def test_a_frequency_our_cli_spells_with_an_underscore_is_still_read(monkeypatch
             stdout=json.dumps(
                 {
                     "ok": True,
-                    "results": [{"query": "таможенное оформление", "freq_type": "exact_ord", "total_value": 100}],
+                    "results": [
+                        {"query": "таможенное оформление", "freq_type": "exact_ord", "total_value": 100, "region": 213}
+                    ],
                 }
             ),
             stderr="",
