@@ -197,6 +197,32 @@ def _parser() -> argparse.ArgumentParser:
     word.add_argument("--run", metavar="ID", help=argparse.SUPPRESS)  # the detached worker of --submit
     word.add_argument("--tasks-dir", help="where the task files live (default: the user state dir)")
     word.add_argument("--json", action="store_true", help="the report as JSON (the contract)")
+    high = sub.add_parser(
+        "highlights", help="bolded words of the snippets and the topic terms (LSI), in Arsenkin's sp shape"
+    )
+    high.add_argument(
+        "--input",
+        help="JSON file with the sp body (or the bare data). Required keys: queries, se, region; optional: "
+        "depth (10, 20 or 50) and with (questions, ads, ai). Flags below build the same body",
+    )
+    high.add_argument("--queries", nargs="+", help="phrases to look at (instead of --input)")
+    high.add_argument("--se", type=int, choices=(1, 2), help="1 Yandex, 2 Google")
+    high.add_argument("--region", help="Yandex `lr` code (213) or Google location id (1011969)")
+    high.add_argument("--depth", type=int, choices=(10, 20, 50), help="results per query (default: 10)")
+    high.add_argument("--with", dest="with_blocks", help="extra blocks: questions, ads, ai")
+    high.add_argument("--source", default="serp", choices=("serp", "arsenkin"), help="who answers (default: serp)")
+    high.add_argument("--cache", action="store_true", help="take the answer from the journal or the stored task")
+    high.add_argument("--max-age", help="with --cache: the oldest stored answer to accept, e.g. 7d")
+    high.add_argument("--timeout", type=float, default=3600.0, help="seconds the whole task may take (source=arsenkin)")
+    high.add_argument(
+        "--poll-interval", type=float, default=15.0, help="seconds between status checks (source=arsenkin)"
+    )
+    high.add_argument("--submit", action="store_true", help="place the task and answer with its id at once")
+    high.add_argument("--task", metavar="ID", help="read a submitted task: its state, or the report when it is done")
+    high.add_argument("--wait", action="store_true", help="with --task: block until the task finishes")
+    high.add_argument("--run", metavar="ID", help=argparse.SUPPRESS)  # the detached worker of --submit
+    high.add_argument("--tasks-dir", help="where the task files live (default: the user state dir)")
+    high.add_argument("--json", action="store_true", help="the report as JSON (the contract)")
     go = sub.add_parser("run", help="run one workflow")
     go.add_argument("workflow", choices=sorted(WORKFLOWS))
     go.add_argument("--input", help='JSON object with the workflow input, e.g. {"urls": ["https://example.com"]}')
@@ -216,6 +242,7 @@ Commands:
   top        positions in Arsenkin's check-top shape, from our serp or from Arsenkin
   clustering keywords grouped by the URLs they share, in Arsenkin's clustering shape
   wordstat  Arsenkin's Wordstat API: type 1 frequencies, type 2 phrase parsing
+  highlights bolded words of the snippets and the topic terms (LSI), in Arsenkin's sp shape
   task       a submitted job: its state, or the report once it is done
   doctor    readiness of this machine: keys, proxies, the workflow engine
   auth      credentials of the services
@@ -370,6 +397,26 @@ DESCRIBE = {
                 ],
             },
             {
+                "name": "highlights",
+                "description": "bolded words of the snippets and the topic terms (LSI), in Arsenkin's sp shape. Input "
+                "required: queries, se (1 Yandex, 2 Google), region; optional: depth (10, 20 or 50) and with "
+                "(questions, ads, ai) — as a JSON file or as flags",
+                "options": [
+                    _param("--input", "path"),
+                    _param("--queries", "str", multiple=True),
+                    _param("--se", "int", 1),
+                    _param("--region", "str"),
+                    _param("--depth", "int", 10),
+                    _param("--with", "str"),
+                    _param("--source", "choice", "serp"),
+                    _param("--cache", "boolean", False),
+                    _param("--max-age", "str"),
+                    _param("--timeout", "float", 3600.0),
+                    _param("--poll-interval", "float", 15.0),
+                    _JSON_OPTION,
+                ],
+            },
+            {
                 "name": "doctor",
                 "description": "readiness of this machine: keys, proxies, the workflow engine",
                 "options": [_JSON_OPTION],
@@ -417,6 +464,8 @@ def main(argv: list[str] | None = None) -> int:
         return _clustering(args)
     if args.command == "wordstat":
         return _wordstat(args)
+    if args.command == "highlights":
+        return _highlights(args)
     if args.command == "task":
         return _tasks(args)
     if args.command == "doctor":
@@ -661,10 +710,87 @@ def _wordstat(args: argparse.Namespace) -> int:
     return 0 if report["ok"] else 1
 
 
+def _highlights_body(args: argparse.Namespace) -> dict:
+    """`--queries … --se 1 --region 213 --with questions` → the `sp` body Arsenkin documents."""
+    body: dict = {"queries": list(args.queries), "se": args.se, "region": args.region}
+    if args.depth is not None:
+        body["depth"] = args.depth
+    if args.with_blocks:
+        body["with"] = [entry.strip() for entry in args.with_blocks.split(",") if entry.strip()]
+    return body
+
+
+def _highlights(args: argparse.Namespace) -> int:
+    from pathlib import Path
+
+    from . import highlights as highlights_source
+
+    tasks_dir = Path(args.tasks_dir) if args.tasks_dir else None
+    if args.run:  # the worker of a submitted `highlights` job goes through the shared runner
+        from . import tasks as tasks_module
+
+        tasks_module.run_task(args.run, tasks_dir)
+        return 0
+    if args.task:
+        answer = asyncio.run(
+            highlights_source.wait(args.task, tasks_dir=tasks_dir)
+            if args.wait
+            else highlights_source.poll(args.task, tasks_dir=tasks_dir)
+        )
+        if args.json:
+            print(json.dumps(answer, ensure_ascii=False))
+        else:
+            print(f"{args.task}: {answer.get('state')}")
+        return 0 if answer.get("ok") and answer.get("state") != "error" else 1
+    if args.input:
+        request = _read_json(Path(args.input))
+    elif args.queries and args.se and args.region:
+        request = _highlights_body(args)
+    else:
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "error": {
+                        "code": "INVALID_ARGUMENTS",
+                        "message": "nothing to do: pass --input, or --queries with --se and --region, or --task ID",
+                    },
+                },
+                ensure_ascii=False,
+            )
+        )
+        raise SystemExit(2)
+    if args.submit:
+        answer = asyncio.run(highlights_source.submit(request, source=args.source, tasks_dir=tasks_dir))
+        if args.json:
+            print(json.dumps(answer, ensure_ascii=False))
+        else:
+            print(f"{answer['task_id']}: {answer['state']}; {answer['poll']}")
+        return 0
+    report = asyncio.run(
+        highlights_source.collect(
+            request,
+            source=args.source,
+            cache=args.cache,
+            max_age=args.max_age,
+            poll_interval=args.poll_interval,
+            timeout=args.timeout,
+        )
+    )
+    if args.json:
+        print(json.dumps(report, ensure_ascii=False))
+        return 0 if report["ok"] else 1
+    for query, found in report["result"]["result"].items():
+        bold = ", ".join(item["phrase"] for item in found["highlights"][:5])
+        lsi = ", ".join(item["term"] for item in found["lsi"][:8])
+        print(f"{query}: {len(found['results'])} results; bold: {bold or '-'}; lsi: {lsi or '-'}")
+    return 0 if report["ok"] else 1
+
+
 def _tasks(args: argparse.Namespace) -> int:
     from pathlib import Path
 
-    from . import clustering, wordstat  # noqa: F401 - importing them registers their task kinds and reports
+    from . import clustering, highlights, wordstat  # noqa: F401 - importing them registers their task kinds
     from . import tasks as tasks_module
 
     tasks_dir = Path(args.tasks_dir) if args.tasks_dir else None

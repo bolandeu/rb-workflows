@@ -39,7 +39,7 @@ def test_submit_answers_at_once_and_the_worker_is_started(monkeypatch, tmp_path)
 
 
 def test_an_unknown_kind_is_refused_before_a_file_is_written(tmp_path) -> None:
-    with pytest.raises(ValueError, match="unknown job 'nope'; known: clustering, semantics, top"):
+    with pytest.raises(ValueError, match="unknown job 'nope'; known: clustering, semantics, sp, top"):
         _run(tasks.submit("nope", {}, store=tasks.FileStore(tmp_path)))
 
 

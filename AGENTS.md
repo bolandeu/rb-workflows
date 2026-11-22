@@ -57,6 +57,13 @@ Arsenkin `wordstat`: `type` 1 — частоты (`queries`, `regions` до 4, `
 `base`→`broad`, `quoted`→`phrase`, `overal`→`exact`, `exact`→`exact-ord`. Фразы — это `broad`-ответ CLI: `popular` —
 левая колонка, `associations` — правая, минус-слова и «+» фильтруются локально.
 
+## `wf highlights`
+
+Arsenkin `sp`: `queries`, `se` 1/2, `region`, `depth` 10/20/50; источник `--source serp|arsenkin`. Свой источник —
+`serp snippets` (поле `highlights` — слова, помеченные провайдером жирным), затем счёт у нас: `highlights` по числу
+результатов и `lsi` (слова и пары слов по числу документов, стоп-слова выкинуты). `--with questions,ads,ai` добавляет
+`serp related`, `serp ads` и `serp summary`. Arsenkin-ответ кэшируется в общей таблице, повтор — `--cache`.
+
 ## `wf task` и слой задач
 
 Медленная работа ставится через `--submit` и читается через `wf task <id> [--wait]`; тип задачи (`kind`) лежит в

@@ -163,6 +163,25 @@ async def collect_wordstat(
     )
 
 
+async def collect_task(
+    client: httpx.AsyncClient,
+    token: str,
+    tools_name: str,
+    data: dict,
+    *,
+    poll_interval: float = 15.0,
+    timeout: float = 3600.0,
+) -> dict:
+    """Any tool of theirs by its `tools_name` (`sp`, `semantics`, `check-top`, `clustering`, `wordstat`)."""
+    return await _collect_task(
+        client,
+        token,
+        {"tools_name": tools_name, "data": dict(data)},
+        poll_interval=poll_interval,
+        timeout=timeout,
+    )
+
+
 async def _collect_task(
     client: httpx.AsyncClient,
     token: str,
