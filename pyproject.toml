@@ -20,6 +20,7 @@ wf = "rb_workflows.cli:main"
 [dependency-groups]
 dev = [
     "rb-9router",  # local only: keys and proxies from 9router's database (RB_WORKFLOWS_SOURCE=9router)
+    "mutmut>=3.8",  # mutation runs of one module at a time: `uv run mutmut run`
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
     "ruff>=0.6",
@@ -58,6 +59,13 @@ select = ["E4", "E7", "E9", "F", "I", "UP", "B", "SIM", "RUF", "S", "T20"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+addopts = "-m 'not live'"  # `live` spends money on the real services: `uv run pytest -m live`
+markers = ["live: talks to the real services (the serp CLI, the network); excluded from the default run"]
+
+[tool.mutmut]
+# One module per run: the whole package is hours. Widen `source_paths` when a module gets its own test file.
+source_paths = ["src/rb_workflows/flows/web_search.py"]
+pytest_add_cli_args_test_selection = ["tests/test_web_search.py"]
 
 [tool.rb.install]
 homeserver = ["rbtools"]

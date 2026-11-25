@@ -22,6 +22,7 @@ from collections.abc import Awaitable, Callable
 
 import httpx
 import trafilatura
+from wmill import workflow
 
 from .. import adapters
 from ..credentials import binding
@@ -340,6 +341,7 @@ async def _main_text(url: str, *, proxy: str | None) -> dict:
     return document(url, source="none", ok=False, reason=found["reason"] or "empty_text")
 
 
+@workflow
 async def web_search(
     queries: list[str],
     *,
