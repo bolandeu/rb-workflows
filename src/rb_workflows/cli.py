@@ -543,6 +543,12 @@ def _workflow(name: str, args: argparse.Namespace) -> int:
     return _fetch_cmd(args) if name == "web-fetch" else _search_cmd(args)
 
 
+def _invalid(message: str) -> NoReturn:
+    """A caller mistake: the Standard's envelope on stdout, exit 2."""
+    print(json.dumps({"ok": False, "error": {"code": "INVALID_ARGUMENTS", "message": message}}, ensure_ascii=False))
+    raise SystemExit(2)
+
+
 def _payload(args: argparse.Namespace) -> dict:
     """`--input` as a JSON object; broken JSON is the caller's mistake, said as the Standard's envelope."""
     if not args.input:
@@ -585,7 +591,7 @@ def _search_cmd(args: argparse.Namespace) -> int:
     if args.sources:
         payload["sources"] = [name.strip() for name in args.sources.split(",") if name.strip()]
     if not payload.get("queries"):
-        raise SystemExit("nothing to look up: pass --queries or --input '{\"queries\": [...]}'")
+        _invalid("nothing to look up: pass --queries or --input '{\"queries\": [...]}'")
 
     result = run("web-search", payload)
     if args.json:
@@ -607,7 +613,7 @@ def _fetch_cmd(args: argparse.Namespace) -> int:
     imports = {"urls": args.urls, "budget_usd": args.budget_usd, "proxy": args.proxy, "steps": args.steps}
     payload |= {key: value for key, value in imports.items() if value is not None}
     if "urls" not in payload:
-        raise SystemExit("nothing to fetch: pass --urls or --input '{\"urls\": [...]}'")
+        _invalid("nothing to fetch: pass --urls or --input '{\"urls\": [...]}'")
 
     result = run("web-fetch", payload)
     if args.json:

@@ -12,6 +12,7 @@ import json
 import subprocess
 
 import httpx
+from wmill import task
 
 from ..credentials import binding
 from ..document import MAX_TEXT, document
@@ -29,6 +30,7 @@ def _empty(service: str, url: str, *, reason: str, status: int | None = None, co
     return document(url, source=service, ok=False, reason=reason, status=status, cost_usd=cost)
 
 
+@task
 async def exa(url: str, *, proxy: str | None = None) -> dict:
     """Exa `/contents`: the best text for an LLM, billed per page (`costDollars.total`)."""
     api_key, proxy = binding("exa", proxy=proxy)
@@ -63,6 +65,7 @@ async def exa(url: str, *, proxy: str | None = None) -> dict:
     )
 
 
+@task
 async def tavily(url: str, *, proxy: str | None = None) -> dict:
     """Tavily `/extract`: `raw_content` of the page, billed per successful extraction."""
     api_key, proxy = binding("tavily", proxy=proxy)
@@ -97,6 +100,7 @@ async def tavily(url: str, *, proxy: str | None = None) -> dict:
     )
 
 
+@task
 async def spider(url: str, *, proxy: str | None = None, render: bool = False) -> dict:
     """`spider fetch --json`: our own stack (fingerprint, proxies, browser) — the step that survives blocks."""
     argv = ["spider", "fetch", url, "--json", "--include", "markdown,text"]
@@ -132,6 +136,7 @@ async def spider(url: str, *, proxy: str | None = None, render: bool = False) ->
     )
 
 
+@task
 async def direct(url: str, *, proxy: str | None = None) -> dict:
     """Plain HTTP GET: the last resort, no key, no cost — and no way around a JS-only page."""
     try:

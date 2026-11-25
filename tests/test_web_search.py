@@ -42,10 +42,10 @@ class FakeSource:
         self.name = name
         self.found = found
         self.error = error
-        self.calls: list[tuple[str, int, str | None]] = []
+        self.calls: list[tuple[str, int, object]] = []
 
-    async def __call__(self, query: str, *, top: int, engine: str = "yandex", proxy: str | None = None) -> dict:
-        self.calls.append((query, top, proxy))
+    async def __call__(self, query: str, *, top: int, **_kwargs: object) -> dict:
+        self.calls.append((query, top, _kwargs.get("proxy")))
         if self.error is not None:
             raise self.error
         return self.found
@@ -179,9 +179,12 @@ def test_the_cli_prints_the_contract(capsys) -> None:
     assert (code, payload["ok"], payload["queries"][0]["source"]) == (0, True, "serp")
 
 
-def test_the_cli_refuses_an_empty_input() -> None:
-    with pytest.raises(SystemExit, match="nothing to look up"):
+def test_the_cli_refuses_an_empty_input(capsys) -> None:
+    with pytest.raises(SystemExit) as stopped:
         cli.main(["web-search", "--json"])
+    payload = json.loads(capsys.readouterr().out)
+    assert (stopped.value.code, payload["error"]["code"]) == (2, "INVALID_ARGUMENTS")
+    assert payload["error"]["message"].startswith("nothing to look up")
 
 
 def test_the_cli_takes_the_sources_as_a_comma_list(capsys) -> None:

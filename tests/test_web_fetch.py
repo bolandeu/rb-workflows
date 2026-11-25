@@ -111,9 +111,12 @@ def test_the_cli_prints_the_contract_and_exits_by_the_result(capsys, monkeypatch
 
 
 @pytest.mark.usefixtures("cascade")
-def test_the_cli_refuses_an_empty_input() -> None:
-    with pytest.raises(SystemExit, match="nothing to fetch"):
+def test_the_cli_refuses_an_empty_input(capsys) -> None:
+    with pytest.raises(SystemExit) as stopped:
         cli.main(["web-fetch", "--json"])
+    payload = json.loads(capsys.readouterr().out)
+    assert (stopped.value.code, payload["error"]["code"]) == (2, "INVALID_ARGUMENTS")
+    assert payload["error"]["message"].startswith("nothing to fetch")
 
 
 def test_a_document_is_json_and_carries_its_identity() -> None:

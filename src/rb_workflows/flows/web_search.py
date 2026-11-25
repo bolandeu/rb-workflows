@@ -22,7 +22,7 @@ from collections.abc import Awaitable, Callable
 
 import httpx
 import trafilatura
-from wmill import workflow
+from wmill import task, workflow
 
 from .. import adapters
 from ..credentials import binding
@@ -73,6 +73,7 @@ def _domain(url: str) -> str | None:
     return host or None
 
 
+@task
 async def serp(query: str, *, top: int, engine: str = "yandex", proxy: str | None = None) -> dict:
     """`serp snippets --json`: the real SERP with snippets, billed by the CLI in rubles out of its own accounts.
 
@@ -98,7 +99,7 @@ async def serp(query: str, *, top: int, engine: str = "yandex", proxy: str | Non
     except ValueError:
         return _failed("serp", f"not_json:{done.returncode}")
     cost = envelope.get("cost_total")
-    currency = envelope.get("cost_currency")
+    currency = next((source.get("cost_currency") for source in envelope.get("sources") or [] if source), None)
     if done.returncode != 0 or not envelope.get("ok"):
         reason = (envelope.get("error") or {}).get("code") or f"exit:{done.returncode}"
         return _failed("serp", reason, cost_currency=currency)
@@ -127,6 +128,7 @@ async def serp(query: str, *, top: int, engine: str = "yandex", proxy: str | Non
     }
 
 
+@task
 async def exa(query: str, *, top: int, engine: str = "yandex", proxy: str | None = None) -> dict:
     """Exa `/search`: their own pick, billed per call (`costDollars.total`)."""
     api_key, proxy = binding("exa", proxy=proxy)
@@ -156,6 +158,7 @@ async def exa(query: str, *, top: int, engine: str = "yandex", proxy: str | None
     return {"source": "exa", "ok": True, "results": rows, "answer": None, "reason": None, "cost_usd": cost}
 
 
+@task
 async def tavily(query: str, *, top: int, engine: str = "yandex", proxy: str | None = None) -> dict:
     """Tavily `/search`: their pick plus a written answer when the account returns one; billed in credits."""
     api_key, proxy = binding("tavily", proxy=proxy)
@@ -326,6 +329,7 @@ async def _html(url: str, *, proxy: str | None) -> dict:
     return {"html": response.text, "title": None, "source": "direct"} if response.status_code < 400 else {}
 
 
+@task
 async def _main_text(url: str, *, proxy: str | None) -> dict:
     """The page's own text: HTML through trafilatura, `spider`'s markdown when the extraction comes back empty."""
     page = await _html(url, proxy=proxy)

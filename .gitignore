@@ -8,3 +8,6 @@ dist/
 .DS_Store
 .pdm-build/
 .cache/
+# mutmut: the mutation copy and its cache
+mutants/
+.mutmut-cache
