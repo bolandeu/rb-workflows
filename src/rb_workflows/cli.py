@@ -14,11 +14,12 @@ from pathlib import Path
 from typing import NoReturn
 
 from .flows.web_fetch import web_fetch
+from .flows.web_search import web_search
 from .version import version
 
 __all__ = ["main", "run"]
 
-WORKFLOWS = {"web-fetch": web_fetch}
+WORKFLOWS = {"web-fetch": web_fetch, "web-search": web_search}
 
 
 def run(name: str, payload: dict) -> dict:
@@ -35,6 +36,42 @@ class _Parser(argparse.ArgumentParser):
     def error(self, message: str) -> NoReturn:
         print(json.dumps({"ok": False, "error": {"code": "INVALID_ARGUMENTS", "message": message}}, ensure_ascii=False))
         raise SystemExit(2)
+
+
+def _add_fetch_args(cmd: argparse.ArgumentParser) -> None:
+    """The input of `web-fetch`."""
+    cmd.add_argument("--input", help='JSON object with the workflow input, e.g. {"urls": ["https://example.com"]}')
+    cmd.add_argument("--urls", nargs="+", help="URLs to fetch (a shortcut for --input)")
+    cmd.add_argument("--budget-usd", type=float, help="spend ceiling for the whole run")
+    cmd.add_argument("--proxy", help="proxy for every step (overrides the key's own binding)")
+    cmd.add_argument("--steps", nargs="+", help="limit the cascade, e.g. --steps exa direct")
+    cmd.add_argument("--json", action="store_true", help="print the result as JSON (the contract)")
+
+
+def _add_search_args(cmd: argparse.ArgumentParser) -> None:
+    """The input of `web-search`: the sources, the mode, and whether to bring the pages' text back."""
+    cmd.add_argument("--input", help='JSON object with the workflow input, e.g. {"queries": ["your topic"]}')
+    cmd.add_argument("--queries", nargs="+", help="what to look up (a shortcut for --input)")
+    cmd.add_argument(
+        "--mode",
+        choices=("cascade", "parallel"),
+        help="cascade (default): the first source with results wins; parallel: ask all and merge by URL",
+    )
+    cmd.add_argument("--sources", help="which sources to ask, in order: serp, exa, tavily (default: all three)")
+    cmd.add_argument("--top", type=int, help="results per source per query (default: 10)")
+    cmd.add_argument("--engine", choices=("yandex", "google", "both"), help="the engine of serp (default: yandex)")
+    cmd.add_argument("--fetch-top", type=int, help="also bring back the main text of the first N pages")
+    cmd.add_argument("--budget-usd", type=float, help="spend ceiling over the USD the sources charge")
+    cmd.add_argument("--proxy", help="proxy for every call (overrides the key's own binding)")
+    cmd.add_argument("--json", action="store_true", help="the report as JSON (the contract)")
+
+
+WORKFLOW_ARGS = {"web-fetch": _add_fetch_args, "web-search": _add_search_args}
+# One line each in `wf --help` and in `describe`.
+WORKFLOW_HELP = {
+    "web-fetch": "fetch pages through the waterfall of services",
+    "web-search": "information on a topic from several search sources",
+}
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -55,7 +92,7 @@ def _parser() -> argparse.ArgumentParser:
     sem.add_argument("--urls", nargs="+", help="URLs to collect for (each one is a task of the service)")
     sem.add_argument(
         "--input",
-        help="JSON file with Arsenkin's semantics body (or the bare data). Required keys: queries; "
+        help="JSON file with the semantics body (or the bare data). Required keys: queries; "
         "optional: mode (url), region (msk), stopwords ([]), concurrency (5), timeout (1800), poll_interval (15)",
     )
     sem.add_argument("--engine", default="msk", choices=("msk", "gru"), help="msk — Yandex Moscow, gru — Google Moscow")
@@ -78,7 +115,7 @@ def _parser() -> argparse.ArgumentParser:
     tasks_cmd.add_argument("--run", metavar="ID", help=argparse.SUPPRESS)  # the detached worker of --submit
     tasks_cmd.add_argument("--tasks-dir", help="where the task files live (default: the user state dir)")
     tasks_cmd.add_argument("--json", action="store_true", help="the report as JSON (the contract)")
-    top_cmd = sub.add_parser("top", help="positions in Arsenkin's check-top shape, from our serp or from Arsenkin")
+    top_cmd = sub.add_parser("top", help="positions for a batch of queries, in the check-top shape")
     top_cmd.add_argument(
         "--input",
         help="JSON file with the check-top body (or the bare data). Required keys: queries, se; "
@@ -110,9 +147,7 @@ def _parser() -> argparse.ArgumentParser:
         "--poll-interval", type=float, default=15.0, help="seconds between status checks (source=arsenkin)"
     )
     top_cmd.add_argument("--json", action="store_true", help="the report as JSON (the contract)")
-    cluster = sub.add_parser(
-        "clustering", help="keywords grouped by the URLs they share, in Arsenkin's clustering shape"
-    )
+    cluster = sub.add_parser("clustering", help="keywords grouped by the URLs they share, in the clustering shape")
     cluster.add_argument(
         "--input",
         help="JSON file with the clustering body (or the bare data). Required keys: queries, se, region; optional: "
@@ -146,9 +181,7 @@ def _parser() -> argparse.ArgumentParser:
     cluster.add_argument("--run", metavar="ID", help=argparse.SUPPRESS)  # the detached worker of --submit
     cluster.add_argument("--tasks-dir", help="where the task files live (default: the user state dir)")
     cluster.add_argument("--json", action="store_true", help="the report as JSON (the contract)")
-    word = sub.add_parser(
-        "wordstat", help="Arsenkin's Wordstat API: type 1 collects frequencies, type 2 parses phrases"
-    )
+    word = sub.add_parser("wordstat", help="Wordstat: type 1 collects frequencies, type 2 parses phrases")
     word.add_argument(
         "--input",
         help="JSON file with the wordstat body (or the bare data). Required keys: queries and regions (type 1) or "
@@ -197,9 +230,7 @@ def _parser() -> argparse.ArgumentParser:
     word.add_argument("--run", metavar="ID", help=argparse.SUPPRESS)  # the detached worker of --submit
     word.add_argument("--tasks-dir", help="where the task files live (default: the user state dir)")
     word.add_argument("--json", action="store_true", help="the report as JSON (the contract)")
-    high = sub.add_parser(
-        "highlights", help="bolded words of the snippets and the topic terms (LSI), in Arsenkin's sp shape"
-    )
+    high = sub.add_parser("highlights", help="bolded words of the snippets and the topic terms (LSI), in the sp shape")
     high.add_argument(
         "--input",
         help="JSON file with the sp body (or the bare data). Required keys: queries, se, region; optional: "
@@ -223,14 +254,12 @@ def _parser() -> argparse.ArgumentParser:
     high.add_argument("--run", metavar="ID", help=argparse.SUPPRESS)  # the detached worker of --submit
     high.add_argument("--tasks-dir", help="where the task files live (default: the user state dir)")
     high.add_argument("--json", action="store_true", help="the report as JSON (the contract)")
-    go = sub.add_parser("run", help="run one workflow")
+    for name, add in WORKFLOW_ARGS.items():  # every workflow is a command of its own, next to the generic `run`
+        add(sub.add_parser(name, help=WORKFLOW_HELP[name]))
+    go = sub.add_parser("run", help="run one workflow: its input as one JSON object, the result as JSON")
     go.add_argument("workflow", choices=sorted(WORKFLOWS))
     go.add_argument("--input", help='JSON object with the workflow input, e.g. {"urls": ["https://example.com"]}')
-    go.add_argument("--urls", nargs="+", help="URLs to fetch (a shortcut for --input)")
-    go.add_argument("--budget-usd", type=float, help="spend ceiling for the whole run")
-    go.add_argument("--proxy", help="proxy for every step (overrides the key's own binding)")
-    go.add_argument("--steps", nargs="+", help="limit the cascade, e.g. --steps exa direct")
-    go.add_argument("--json", action="store_true", help="print the result as JSON (the contract)")
+    go.add_argument("--json", action="store_true", help="the result as JSON (always JSON)")
     return parser
 
 
@@ -239,10 +268,12 @@ BARE_HELP = """Usage: wf COMMAND
 Commands:
   run       run one workflow
   semantics  a keyword set for one URL or a batch, from an external service
-  top        positions in Arsenkin's check-top shape, from our serp or from Arsenkin
-  clustering keywords grouped by the URLs they share, in Arsenkin's clustering shape
-  wordstat  Arsenkin's Wordstat API: type 1 frequencies, type 2 phrase parsing
-  highlights bolded words of the snippets and the topic terms (LSI), in Arsenkin's sp shape
+  top        positions for a batch of queries, in the check-top shape
+  clustering keywords grouped by the URLs they share, in the clustering shape
+  wordstat  Wordstat: type 1 frequencies, type 2 phrase parsing
+  highlights bolded words of the snippets and the topic terms (LSI), in the sp shape
+  web-fetch fetch pages through the waterfall of services
+  web-search information on a topic from several search sources
   task       a submitted job: its state, or the report once it is done
   doctor    readiness of this machine: keys, proxies, the workflow engine
   auth      credentials of the services
@@ -259,6 +290,16 @@ def _param(name: str, kind: str, default: object = None, *, multiple: bool = Fal
 
 
 _JSON_OPTION = _param("--json", "boolean", False)
+
+# The options of every workflow, shared by the workflow command and by the generic `run`.
+_FETCH_OPTIONS = [
+    _param("--input", "path"),
+    _param("--urls", "str", multiple=True),
+    _param("--budget-usd", "float"),
+    _param("--proxy", "str"),
+    _param("--steps", "str", multiple=True),
+    _JSON_OPTION,
+]
 
 DESCRIBE = {
     "ok": True,
@@ -279,15 +320,29 @@ DESCRIBE = {
         "commands": [
             {
                 "name": "run",
-                "description": "run one workflow",
+                "description": "run one workflow: its input as one JSON object, the result as JSON",
                 "arguments": [_param("workflow", "choice")],
+                "options": [_param("--input", "path"), _JSON_OPTION],
+            },
+            {
+                "name": "web-fetch",
+                "description": "fetch pages through the waterfall of services, under a spend ceiling",
+                "options": _FETCH_OPTIONS,
+            },
+            {
+                "name": "web-search",
+                "description": "information on a topic from several search sources: mode (cascade), sources "
+                "(serp, exa, tavily), top (10), engine (yandex), fetch_top (0) — the pages' text through trafilatura",
                 "options": [
-                    _param("--input", "str"),
-                    _param("--urls", "str", multiple=True),
                     _param("--input", "path"),
+                    _param("--queries", "str", multiple=True),
+                    _param("--mode", "choice", "cascade"),
+                    _param("--sources", "str", "serp,exa,tavily"),
+                    _param("--top", "int", 10),
+                    _param("--engine", "choice", "yandex"),
+                    _param("--fetch-top", "int", 0),
                     _param("--budget-usd", "float"),
                     _param("--proxy", "str"),
-                    _param("--steps", "str", multiple=True),
                     _JSON_OPTION,
                 ],
             },
@@ -323,7 +378,7 @@ DESCRIBE = {
             },
             {
                 "name": "top",
-                "description": "positions in Arsenkin's check-top shape. Input required: queries, se; "
+                "description": "positions in the check-top shape. Input required: queries, se; "
                 "optional: depth (10), is_snippet (false), noreask (false) — as a JSON file or as flags",
                 "options": [
                     _param("--input", "path"),
@@ -345,7 +400,7 @@ DESCRIBE = {
             },
             {
                 "name": "clustering",
-                "description": "keywords grouped by the URLs they share, in Arsenkin's clustering shape. Input required: "
+                "description": "keywords grouped by the URLs they share, in the clustering shape. Input required: "
                 "queries, se (1 Yandex, 2 Google), region; optional: group (soft), count (3), depth (10), "
                 "stoplist ([]), ws ([]), main (false) — as a JSON file or as flags",
                 "options": [
@@ -371,7 +426,7 @@ DESCRIBE = {
             },
             {
                 "name": "wordstat",
-                "description": "Arsenkin's Wordstat API: type 1 collects frequencies (queries, regions, ws), type 2 "
+                "description": "Wordstat: type 1 collects frequencies (queries, regions, ws), type 2 "
                 "parses phrases (queries, region, minus_words, is_right) — as a JSON file or as flags",
                 "options": [
                     _param("--input", "path"),
@@ -398,7 +453,7 @@ DESCRIBE = {
             },
             {
                 "name": "highlights",
-                "description": "bolded words of the snippets and the topic terms (LSI), in Arsenkin's sp shape. Input "
+                "description": "bolded words of the snippets and the topic terms (LSI), in the sp shape. Input "
                 "required: queries, se (1 Yandex, 2 Google), region; optional: depth (10, 20 or 50) and with "
                 "(questions, ads, ai) — as a JSON file or as flags",
                 "options": [
@@ -456,6 +511,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "describe":
         print(json.dumps(DESCRIBE, ensure_ascii=False))
         return 0
+    if args.command in WORKFLOWS:
+        return _workflow(args.command, args)
     if args.command == "semantics":
         return _semantics(args)
     if args.command == "top":
@@ -478,13 +535,81 @@ def main(argv: list[str] | None = None) -> int:
             print(BARE_AUTH, end="")
             return 0
         return _auth_status()
-    payload: dict = json.loads(args.input) if args.input else {}
+    return _run_generic(args)
+
+
+def _workflow(name: str, args: argparse.Namespace) -> int:
+    """The command of one workflow: the flags of its own parser, or `--input`, and a human summary unless `--json`."""
+    return _fetch_cmd(args) if name == "web-fetch" else _search_cmd(args)
+
+
+def _payload(args: argparse.Namespace) -> dict:
+    """`--input` as a JSON object; broken JSON is the caller's mistake, said as the Standard's envelope."""
+    if not args.input:
+        return {}
+    try:
+        payload = json.loads(args.input)
+    except ValueError as exc:
+        print(
+            json.dumps(
+                {"ok": False, "error": {"code": "INVALID_ARGUMENTS", "message": f"--input: {exc}"}},
+                ensure_ascii=False,
+            )
+        )
+        raise SystemExit(2) from None
+    if not isinstance(payload, dict):
+        raise SystemExit("--input must be a JSON object")
+    return payload
+
+
+def _run_generic(args: argparse.Namespace) -> int:
+    """`run <workflow>`: the input as one JSON object, the result as JSON — the machine entry of any workflow."""
+    result = run(args.workflow, _payload(args))
+    print(json.dumps(result, ensure_ascii=False))
+    return 0 if result["ok"] else 1
+
+
+def _search_cmd(args: argparse.Namespace) -> int:
+    """`web-search`: the flags of `_add_search_args` build the payload, `--input` merges over them."""
+    payload: dict = _payload(args)
+    flags = {
+        "queries": args.queries,
+        "mode": args.mode,
+        "top": args.top,
+        "engine": args.engine,
+        "fetch_top": args.fetch_top,
+        "budget_usd": args.budget_usd,
+        "proxy": args.proxy,
+    }
+    payload |= {key: value for key, value in flags.items() if value is not None}
+    if args.sources:
+        payload["sources"] = [name.strip() for name in args.sources.split(",") if name.strip()]
+    if not payload.get("queries"):
+        raise SystemExit("nothing to look up: pass --queries or --input '{\"queries\": [...]}'")
+
+    result = run("web-search", payload)
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False))
+        return 0 if result["ok"] else 1
+    for entry in result["queries"]:
+        print(f"{entry['query']}: {len(entry['results'])} results from {entry.get('source') or 'no source'}")
+        for row in entry["results"][:10]:
+            print(f"  {row['position'] or '-'}  {row['url']}")
+        for doc in entry.get("documents") or []:
+            print(f"  text {len(doc['text'] or '')} chars ({doc['source']}, {doc['via'] or '-'}): {doc['url']}")
+    print(f"spent: ${result['budget_spent_usd']:.4f}", file=sys.stderr)
+    return 0 if result["ok"] else 1
+
+
+def _fetch_cmd(args: argparse.Namespace) -> int:
+    """`web-fetch`: the flags of `_add_fetch_args` build the payload, `--input` merges over them."""
+    payload: dict = _payload(args)
     imports = {"urls": args.urls, "budget_usd": args.budget_usd, "proxy": args.proxy, "steps": args.steps}
     payload |= {key: value for key, value in imports.items() if value is not None}
     if "urls" not in payload:
         raise SystemExit("nothing to fetch: pass --urls or --input '{\"urls\": [...]}'")
 
-    result = run(args.workflow, payload)
+    result = run("web-fetch", payload)
     if args.json:
         print(json.dumps(result, ensure_ascii=False))
         return 0 if result["ok"] else 1
@@ -510,7 +635,7 @@ def _read_json(path: Path) -> dict:
 
 
 def _check_top_body(args: argparse.Namespace) -> dict:
-    """`--queries … --se 1:213,11:1011969 --depth 10` → the check-top body Arsenkin documents."""
+    """`--queries … --se 1:213,11:1011969 --depth 10` → the check-top body."""
     se = []
     for part in (args.se or "1:213").split(","):
         kind, _, region = part.strip().partition(":")
@@ -537,7 +662,7 @@ def _check_top_body(args: argparse.Namespace) -> dict:
 
 
 def _clustering_body(args: argparse.Namespace) -> dict:
-    """`--queries … --se 1 --region 213 --group soft --count 3` → the clustering body Arsenkin documents."""
+    """`--queries … --se 1 --region 213 --group soft --count 3` → the clustering body."""
     body: dict = {"queries": list(args.queries), "se": args.se, "region": args.region}
     for key in ("group", "count", "depth"):
         if getattr(args, key) is not None:
@@ -620,7 +745,7 @@ def _clustering(args: argparse.Namespace) -> int:
 
 
 def _wordstat_body(args: argparse.Namespace) -> dict:
-    """`--type 1 --queries … --regions 213,225 --ws base` → the wordstat body Arsenkin documents."""
+    """`--type 1 --queries … --regions 213,225 --ws base` → the wordstat body."""
     kind = args.type or 1
     body: dict = {"type": kind, "queries": list(args.queries)}
     if kind == 1 and args.regions:
@@ -711,7 +836,7 @@ def _wordstat(args: argparse.Namespace) -> int:
 
 
 def _highlights_body(args: argparse.Namespace) -> dict:
-    """`--queries … --se 1 --region 213 --with questions` → the `sp` body Arsenkin documents."""
+    """`--queries … --se 1 --region 213 --with questions` → the `sp` body."""
     body: dict = {"queries": list(args.queries), "se": args.se, "region": args.region}
     if args.depth is not None:
         body["depth"] = args.depth
@@ -853,7 +978,7 @@ def _top(args: argparse.Namespace) -> int:
         if args.json:
             print(json.dumps(answer, ensure_ascii=False))
         else:
-            print(f"{args.id}: {answer.get('state')}")
+            print(f"{args.task}: {answer.get('state')}")
         return 0 if answer.get("ok") and answer.get("state") != "error" else 1
     if args.input:
         request = _read_json(Path(args.input))

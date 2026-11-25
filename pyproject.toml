@@ -11,6 +11,7 @@ dependencies = [
     "platformdirs>=4.2",  # 9router proxies are socks5 (httpx takes socksio)
     "psycopg[binary]>=3.2",  # the shared answer cache lives in PostgreSQL when WORKFLOWS_DATABASE_URL is set
     "rb-credentials>=0.7.1,<1",
+    "trafilatura>=2.0",  # main text of a page for web-search --fetch-top: no menu, no footer, no ads
 ]
 
 [project.scripts]

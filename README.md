@@ -4,15 +4,16 @@
 `@task`, `step()`. Тот же файл гоняется локально и деплоится в Windmill без правок — вне джоба `@task` просто
 выполняет тело, `step()` выполняется инлайн, `sleep()` падает в `asyncio.sleep`.
 
-Первый воркфлоу — **`web-fetch`**: один URL или список. Первым идёт свой `spider fetch` (бесплатно, со своим
-фингерпринтом и прокси), и только если он не вернул текст — водопад по платным сервисам (пока exa).
+Два воркфлоу: **`web-fetch`** — безотказно достать страницу (HTML, текст, метатеги), и **`web-search`** — собрать
+информацию по теме из нескольких поисковых источников. Каждый воркфлоу — своя команда (`wf web-fetch`,
+`wf web-search`); `wf run <workflow> --input '{…}'` — общий машинный вход для любого из них.
 
 ## Запуск
 
 ```bash
-wf run web-fetch --urls https://example.com --json
-wf run web-fetch --input '{"urls": ["https://a", "https://b"], "budget_usd": 0.01}' --json
-wf run web-fetch --urls https://example.com --steps exa --proxy socks5://u:p@h:1080
+wf web-fetch --urls https://example.com --json
+wf web-fetch --input '{"urls": ["https://a", "https://b"], "budget_usd": 0.01}' --json
+wf web-fetch --urls https://example.com --steps exa --proxy socks5://u:p@h:1080
 ```
 
 `--json` — контракт (его читают скрипты и агенты), без него — короткая сводка. Exit 0 — хоть что-то получено.
@@ -44,6 +45,43 @@ wf run web-fetch --urls https://example.com --steps exa --proxy socks5://u:p@h:1
 ```
 
 Результат шага чекпоинтится в Windmill, поэтому документ — всегда JSON и текст усечён до 200 000 символов.
+
+## `web-search` — информация по теме, из нескольких источников
+
+Задача другая, чем у `web-fetch`: не достать страницу безотказно, а собрать материал. Источники: свой `serp`
+(настоящая выдача Yandex/Google с позициями и сниппетами, аккаунты XMLRiver/XMLStock у самого CLI), `exa` и `tavily`
+(их подбор и готовый ответ модели).
+
+```bash
+wf web-search --queries "требования к метатегу title" --json              # каскад, serp первым
+wf web-search --queries "..." --mode parallel --sources serp,exa --json   # все сразу, сведение по URL
+wf web-search --queries "..." --fetch-top 3 --json                        # плюс текст трёх верхних страниц
+```
+
+| шаг | что даёт | цена |
+| --- | --- | --- |
+| `serp` | `serp snippets --json`: позиции, сниппеты, подсветки | рубли, считает CLI (`cost`, `cost_currency`) |
+| `exa` | `POST /search`: их подбор | `costDollars.total`, ~$0.005/запрос |
+| `tavily` | `POST /search`: подбор плюс `answer` | кредиты, в `cost_usd` пересчитаны |
+
+- `--mode cascade` (по умолчанию) — по порядку `serp` → `exa` → `tavily`, первый ответивший закрывает запрос.
+- `--mode parallel` — все выбранные сразу; сведение по URL: `sources`, `positions`, `best_position`, сырые списки
+  остаются в `by_source`.
+- `--fetch-top N` — текст верхних N страниц: HTML от `spider` (затем прямой GET), текст через trafilatura (главный
+  контент без меню и футера); пустое извлечение — markdown от `spider`.
+- Источник без ключа или упавший — причина в `tried`, прогон не падает.
+
+Ключи — `credentials.binding()`: локально 9router (`RB_WORKFLOWS_SOURCE=9router`: несколько аккаунтов на сервис и
+прокси каждого), в Windmill — ресурс. У `serp` ключей воркфлоу нет — CLI берёт XMLRiver/XMLStock сам.
+
+```json
+{"ok": true, "mode": "parallel", "sources": ["serp", "exa"], "budget_spent_usd": 0.005,
+ "queries": [{"query": "...", "ok": true, "source": "serp",
+              "results": [{"position": 1, "url": "...", "domain": "...", "title": "...", "snippet": "...",
+                           "sources": ["serp", "exa"], "positions": {"serp": 1, "exa": 3}, "best_position": 1}],
+              "answer": null, "tried": [], "by_source": {"serp": {"ok": true, "results": []}},
+              "documents": [{"url": "...", "ok": true, "text": "...", "source": "spider", "via": "trafilatura"}]}]}
+```
 
 ## `semantics` — ключевые фразы по URL
 
@@ -93,10 +131,10 @@ wf task --gc --older-than 7 --json                              # убрать �
 `create`, `get`, `save`, `cancel`. Приложение на FastAPI подставит свою реализацию, команды и формат ответа не
 изменятся.
 
-## `top` — выгрузка ТОП в формате Arsenkin, из двух источников
+## `top` — выгрузка ТОП, из двух источников
 
-Вход и выход — формат Arsenkin `check-top`, поэтому задание, написанное под их API, работает здесь без правок,
-а отчёт читается тем, что читает их ответ. Источник выбирается: наш `serp` (по умолчанию) или сам Arsenkin.
+Вход и выход — формат `check-top`: задание в этом формате работает здесь без правок. Источник выбирается: наш `serp`
+(по умолчанию) или Arsenkin (`--source arsenkin`).
 
 ```bash
 wf top --queries "ремонт киа" --se 1:213 --json          # то же, но флагами
@@ -119,8 +157,8 @@ wf top --input top.json --source arsenkin --json      # их задача check-
 
 ## `clustering` — кластеры запросов, из двух источников
 
-Вход и выход — Arsenkin `clustering`, поэтому задание, написанное под их API, работает здесь без правок. Источник —
-свой стек (`serp` + `wordstat`, по умолчанию) или сам Arsenkin.
+Вход и выход — формат `clustering`. Источник — свой стек (`serp` + `wordstat`, по умолчанию) или Arsenkin
+(`--source arsenkin`).
 
 ```bash
 wf clustering --queries "ремонт киа" "сервис киа" --se 1 --region 213 --json
@@ -151,8 +189,8 @@ wf clustering --input clustering.json --source arsenkin --json
 
 ## `wordstat` — частотность и парсинг фраз, из двух источников
 
-Вход и выход — Arsenkin `wordstat` (один `tools_name`, два `type`), поэтому задание под их API работает без правок.
-Источник — наш CLI `wordstat` (по умолчанию) или сам Arsenkin.
+Вход и выход — формат `wordstat` (один `tools_name`, два `type`). Источник — наш CLI `wordstat` (по умолчанию) или
+Arsenkin (`--source arsenkin`).
 
 ```bash
 wf wordstat --queries "ремонт киа" --regions 213,225 --ws base,exact --json          # type 1: частоты
@@ -176,8 +214,8 @@ wf wordstat --input wordstat.json --source arsenkin --json
 
 ## `highlights` — подсветки и LSI, из двух источников
 
-Вход — Arsenkin `sp`: `queries`, `se` (1 Яндекс, 2 Google), `region`, `depth` (10/20/50). Источник — наш `serp`
-(по умолчанию) или сам Arsenkin. Что мы добавляем к контракту: `--with questions,ads,ai` — вопросы (`serp related`),
+Вход — формат `sp`: `queries`, `se` (1 Яндекс, 2 Google), `region`, `depth` (10/20/50). Источник — наш `serp`
+(по умолчанию) или Arsenkin (`--source arsenkin`). Что мы добавляем к контракту: `--with questions,ads,ai` — вопросы (`serp related`),
 реклама (`serp ads`) и сводка (`serp summary`) в том же прогоне.
 
 ```bash

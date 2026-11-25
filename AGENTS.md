@@ -19,6 +19,15 @@
   неожиданность: оно не валит воркфлоу, но попадает в `tried[]`.
 - `trust_env=False` у всех HTTP-клиентов: `HTTP(S)_PROXY` не включает прокси сам, только `--proxy` или привязка ключа.
 
+## `wf web-search`
+
+Сбор информации по теме, а не безотказность. `mode=cascade` (по умолчанию): порядок `serp` → `exa` → `tavily`, первый
+ответивший закрывает запрос. `mode=parallel`: все выбранные сразу, сведение по URL — `sources`, `positions`,
+`best_position`, сырое в `by_source`. `--sources` сужает набор, `--fetch-top N` добавляет текст верхних страниц: HTML
+от `spider`/прямого GET, текст через trafilatura, при пустом извлечении — markdown от `spider`. Источник без ключа
+или упавший — запись в `tried`, не ошибка прогона. Ключи `exa`/`tavily` — `credentials.binding()`; у `serp` ключей
+воркфлоу нет (CLI берёт XMLRiver/XMLStock сам), его стоимость в рублях.
+
 ## Сервисы семантики
 
 `wf semantics` получает фразы по URL у внешнего сервиса; обёртка (`semantics.py`) держит лимиты (5 задач, 30 запросов
@@ -27,18 +36,18 @@
 
 ## `wf top` и источник `serp`
 
-`top` — единственная команда позиций: вход/выход в форме Arsenkin `check-top`, источник `--source serp|arsenkin`
+`top` — единственная команда позиций: вход/выход в форме `check-top`, источник `--source serp|arsenkin`
 (по умолчанию serp). Отдельной `wf serp` нет — `serp.py` внутренний источник `top`.
 
 ## `wf top`
 
-Вход/выход — Arsenkin `check-top`; источник `--source serp|arsenkin` (по умолчанию serp). `collect[query][se]` —
+Вход/выход — `check-top`; источник `--source serp|arsenkin` (по умолчанию serp). `collect[query][se]` —
 URL в порядке выдачи; `summary.top` — URL по силе. Неподдерживаемый движок (YouTube) даёт пустой список и индекс
 в `skipped`, не ошибку. Arsenkin-статусы: известные «готово»/«провал», всё остальное (`starting`, `process`) — ждём.
 
 ## `wf clustering`
 
-Вход — Arsenkin `clustering` (обязательные `queries`, `se` 1/2, `region`; `group` soft, `count` 3, `depth` 10,
+Вход — `clustering` (обязательные `queries`, `se` 1/2, `region`; `group` soft, `count` 3, `depth` 10,
 `stoplist` [], `ws` [], `main` false). Источник `--source serp|arsenkin`. `serp` — свой стек: топы через `serp
 search`, группировка по пересечению URL: `hard` — не меньше `count` общих URL и половина меньшего топа, `soft` — один
 общий URL и 40% меньшего топа (доля обязательна: популярный агрегатор иначе склеивает всю нишу в один кластер; слияние
@@ -49,7 +58,7 @@ search`, группировка по пересечению URL: `hard` — не
 
 ## `wf wordstat`
 
-Arsenkin `wordstat`: `type` 1 — частоты (`queries`, `regions` до 4, `ws`, `device`), `type` 2 — парсинг фраз
+`wordstat`: `type` 1 — частоты (`queries`, `regions` до 4, `ws`, `device`), `type` 2 — парсинг фраз
 (`queries`, `region`, `minus_words`, `is_right`, `is_clear`, `is_clear_minus`). Источник `--source wordstat|arsenkin`.
 Наш CLI принимает несколько регионов за вызов (`--lr 213,225`: каждый регион — свой платный запрос, ответ помечен
 регионом), `--device` и `--limit` (`groupby` XMLStock) проброшены.
@@ -59,7 +68,7 @@ Arsenkin `wordstat`: `type` 1 — частоты (`queries`, `regions` до 4, `
 
 ## `wf highlights`
 
-Arsenkin `sp`: `queries`, `se` 1/2, `region`, `depth` 10/20/50; источник `--source serp|arsenkin`. Свой источник —
+`sp`: `queries`, `se` 1/2, `region`, `depth` 10/20/50; источник `--source serp|arsenkin`. Свой источник —
 `serp snippets` (поле `highlights` — слова, помеченные провайдером жирным), затем счёт у нас: `highlights` по числу
 результатов и `lsi` (слова и пары слов по числу документов, стоп-слова выкинуты). `--with questions,ads,ai` добавляет
 `serp related`, `serp ads` и `serp summary`. Arsenkin-ответ кэшируется в общей таблице, повтор — `--cache`.
@@ -96,5 +105,5 @@ Arsenkin `sp`: `queries`, `se` 1/2, `region`, `depth` 10/20/50; источник
 uv sync
 uv run pytest -q
 uv run ruff check . && uv run ty check
-wf run web-fetch --urls https://example.com --json
+wf web-fetch --urls https://example.com --json
 ```

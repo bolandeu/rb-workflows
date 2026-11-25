@@ -105,7 +105,7 @@ async def test_a_raising_step_does_not_kill_the_workflow(cascade, monkeypatch: p
 @pytest.mark.usefixtures("cascade")
 def test_the_cli_prints_the_contract_and_exits_by_the_result(capsys, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(cli.WORKFLOWS, "web-fetch", flow.web_fetch)
-    code = cli.main(["run", "web-fetch", "--urls", "https://a.example/good", "--json"])
+    code = cli.main(["web-fetch", "--urls", "https://a.example/good", "--json"])
     payload = json.loads(capsys.readouterr().out)
     assert (code, payload["ok"], payload["documents"][0]["source"]) == (0, True, "spider")
 
@@ -113,7 +113,7 @@ def test_the_cli_prints_the_contract_and_exits_by_the_result(capsys, monkeypatch
 @pytest.mark.usefixtures("cascade")
 def test_the_cli_refuses_an_empty_input() -> None:
     with pytest.raises(SystemExit, match="nothing to fetch"):
-        cli.main(["run", "web-fetch", "--json"])
+        cli.main(["web-fetch", "--json"])
 
 
 def test_a_document_is_json_and_carries_its_identity() -> None:
