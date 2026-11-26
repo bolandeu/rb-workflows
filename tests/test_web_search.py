@@ -126,10 +126,14 @@ async def test_a_raising_source_is_a_reason_not_a_failed_run(monkeypatch) -> Non
 
 
 @pytest.mark.usefixtures("sources")
-async def test_the_budget_stops_the_next_query() -> None:
-    result = await flow.web_search(["киа", "киа"], mode="parallel", sources=["exa"], budget_usd=0.001)
-    assert [entry.get("reason") for entry in result["queries"]] == [None, "budget_exhausted"]
-    assert result["budget_spent_usd"] == 0.005
+async def test_the_budget_stops_the_next_query(monkeypatch) -> None:
+    monkeypatch.setitem(flow.SOURCES, "exa", FakeSource("exa", _answer("exa", [_row("https://a/1", 1)], cost=0.25)))
+    # 0.25 is exact in binary: the ceiling is reached, not almost reached
+    spent = await flow.web_search(["киа", "киа"], mode="parallel", sources=["exa"], budget_usd=0.25)
+    assert [entry.get("reason") for entry in spent["queries"]] == [None, "budget_exhausted"]
+    result = await flow.web_search(["киа", "киа"], mode="parallel", sources=["exa"], budget_usd=0.5)
+    assert [entry.get("reason") for entry in result["queries"]] == [None, None]  # half the ceiling is not the ceiling
+    assert result["budget_spent_usd"] == 0.5
 
 
 @pytest.mark.usefixtures("sources")
@@ -167,11 +171,11 @@ async def test_an_empty_extraction_falls_back_to_the_markdown_of_spider(monkeypa
 
 @pytest.mark.usefixtures("sources")
 async def test_an_unknown_source_or_mode_is_refused() -> None:
-    with pytest.raises(ValueError, match="unknown source"):
+    with pytest.raises(ValueError, match=r"^unknown source 'nope'; known: serp, exa, tavily$"):
         await flow.web_search(["киа"], sources=["nope"])
-    with pytest.raises(ValueError, match="unknown mode"):
+    with pytest.raises(ValueError, match=r"^unknown mode 'both'; known: cascade, parallel$"):
         await flow.web_search(["киа"], mode="both")
-    with pytest.raises(ValueError, match="no queries"):
+    with pytest.raises(ValueError, match=r"^no queries$"):
         await flow.web_search([])
 
 
@@ -462,11 +466,12 @@ class FakeResponse:
 
 
 class FakeClient:
-    """Stands in for `httpx.AsyncClient`: records the calls, answers with one prepared response."""
+    """Stands in for `httpx.AsyncClient`: records the constructor and the calls, answers with one response."""
 
-    def __init__(self, response: FakeResponse, *, error: Exception | None = None) -> None:
+    def __init__(self, response: FakeResponse, *, error: Exception | None = None, **init: object) -> None:
         self.response = response
         self.error = error
+        self.init = init
         self.calls: list[dict] = []
 
     async def __aenter__(self) -> FakeClient:
@@ -485,14 +490,36 @@ class FakeClient:
         return await self.post(url, **kwargs)
 
 
+class BindingRecorder:
+    """`credentials.binding`: records what a source asked for, answers with a key and the proxy it got."""
+
+    def __init__(self, key: str = "k", proxy: str | None = None) -> None:
+        self.key = key
+        self.proxy = proxy
+        self.calls: list[dict] = []
+
+    def __call__(self, service: str, **kwargs: object) -> tuple[str | None, str | None]:
+        self.calls.append({"service": service, **kwargs})
+        given = kwargs.get("proxy")
+        return (self.key or None), (given if isinstance(given, str) else self.proxy)
+
+
 def _client(monkeypatch, response: FakeResponse, *, error: Exception | None = None) -> FakeClient:
+    """One client for every `AsyncClient(...)`: its constructor arguments are kept on `init`."""
     client = FakeClient(response, error=error)
-    monkeypatch.setattr(flow.httpx, "AsyncClient", lambda **_kwargs: client)
+
+    def factory(**kwargs: object) -> FakeClient:
+        client.init = kwargs
+        return client
+
+    monkeypatch.setattr(flow.httpx, "AsyncClient", factory)
     return client
 
 
-def _key(monkeypatch, key: str = "k") -> None:
-    monkeypatch.setattr(flow, "binding", lambda service, **_kwargs: (key, None))
+def _key(monkeypatch, key: str = "k") -> BindingRecorder:
+    recorder = BindingRecorder(key)
+    monkeypatch.setattr(flow, "binding", recorder)
+    return recorder
 
 
 class FakeProcess:
@@ -502,10 +529,10 @@ class FakeProcess:
         self.returncode = returncode
         self.stdout = stdout
         self.raises = raises
-        self.calls: list[list[str]] = []
+        self.calls: list[dict] = []
 
-    def __call__(self, argv: list[str], **_kwargs: object) -> FakeProcess:
-        self.calls.append(argv)
+    def __call__(self, argv: list[str], **kwargs: object) -> FakeProcess:
+        self.calls.append({"argv": argv, **kwargs})
         if self.raises is not None:
             raise self.raises
         return self
@@ -530,33 +557,52 @@ async def test_serp_asks_its_own_cli_for_snippets(monkeypatch) -> None:
     process = FakeProcess(0, json.dumps(envelope))
     monkeypatch.setattr(flow.subprocess, "run", process)
     found = await flow.serp("q", top=10)
-    assert found["ok"] is True
-    assert found["results"] == [{**_row("https://a/1", 1, "s"), "title": "t"}]
-    assert (found["cost"], found["cost_currency"], found["cost_usd"]) == (0.025, "RUB", None)
-    assert process.calls[0][:5] == ["serp", "snippets", "q", "--engine", "yandex"]
-    assert "--top" in process.calls[0] and process.calls[0][process.calls[0].index("--top") + 1] == "10"
+    assert found == {
+        "source": "serp",
+        "ok": True,
+        "results": [{**_row("https://a/1", 1, "s"), "title": "t"}],
+        "answer": None,
+        "reason": None,
+        "cost_usd": None,
+        "cost_currency": "RUB",
+        "cost": 0.025,
+    }
+    assert process.calls == [
+        {
+            "argv": ["serp", "snippets", "q", "--engine", "yandex", "--top", "10", "--json"],
+            "capture_output": True,
+            "text": True,
+            "timeout": flow.SERP_TIMEOUT,
+            "check": False,
+        }
+    ]
+
+
+async def test_serp_never_asks_for_fewer_than_ten(monkeypatch) -> None:
+    process = FakeProcess(0, json.dumps({"ok": True, "results": [{"url": "https://a/1"}]}))
+    monkeypatch.setattr(flow.subprocess, "run", process)
+    await flow.serp("q", top=3, engine="both")
+    assert process.calls[0]["argv"] == ["serp", "snippets", "q", "--engine", "both", "--top", "10", "--json"]
 
 
 async def test_serp_reports_a_missing_cli_a_timeout_and_broken_json(monkeypatch) -> None:
     monkeypatch.setattr(flow.subprocess, "run", FakeProcess(raises=FileNotFoundError()))
-    assert (await flow.serp("q", top=10))["reason"] == "not_installed"
+    assert await flow.serp("q", top=10) == flow._failed("serp", "not_installed")
     monkeypatch.setattr(flow.subprocess, "run", FakeProcess(raises=subprocess.TimeoutExpired("serp", 1)))
-    assert (await flow.serp("q", top=10))["reason"] == "timeout"
+    assert await flow.serp("q", top=10) == flow._failed("serp", "timeout")
     monkeypatch.setattr(flow.subprocess, "run", FakeProcess(0, "not json"))
-    assert (await flow.serp("q", top=10))["reason"] == "not_json:0"
+    assert await flow.serp("q", top=10) == flow._failed("serp", "not_json:0")
 
 
 async def test_serp_reports_the_error_code_of_the_cli(monkeypatch) -> None:
     envelope = {"ok": False, "error": {"code": "PROVIDER_ERROR"}}
     monkeypatch.setattr(flow.subprocess, "run", FakeProcess(5, json.dumps(envelope)))
-    found = await flow.serp("q", top=10)
-    assert (found["ok"], found["reason"]) == (False, "PROVIDER_ERROR")
+    assert await flow.serp("q", top=10) == flow._failed("serp", "PROVIDER_ERROR")
 
 
 async def test_serp_without_results_is_empty_not_broken(monkeypatch) -> None:
     monkeypatch.setattr(flow.subprocess, "run", FakeProcess(0, json.dumps({"ok": True, "results": []})))
-    found = await flow.serp("q", top=10)
-    assert (found["ok"], found["reason"], found["results"]) == (False, "empty", [])
+    assert await flow.serp("q", top=10) == flow._failed("serp", "empty", cost_currency=None)
 
 
 async def test_exa_without_a_key_asks_nobody(monkeypatch) -> None:
@@ -565,29 +611,43 @@ async def test_exa_without_a_key_asks_nobody(monkeypatch) -> None:
 
 
 async def test_exa_answers_with_its_own_pick_and_cost(monkeypatch) -> None:
-    _key(monkeypatch)
+    binding_calls = _key(monkeypatch)
     body = {
-        "results": [{"url": "https://a/1", "title": "t", "text": "long " * 400}],
+        "results": [{"url": "https://a/1", "title": "t", "text": "x" * 5000}],
         "costDollars": {"total": 0.005},
     }
     client = _client(monkeypatch, FakeResponse(200, body))
-    found = await flow.exa("q", top=1)
-    assert found["source"] == "exa"
-    assert found["results"][0]["url"] == "https://a/1"
-    assert len(found["results"][0]["snippet"]) == flow.SNIPPET_CHARS  # the snippet is cut, not the whole text
-    assert found["cost_usd"] == 0.005
-    assert client.calls[0]["url"] == "https://api.exa.ai/search"
-    assert client.calls[0]["json"]["numResults"] == 1
+    found = await flow.exa("q", top=1, proxy="socks5://p:1")
+    assert found == {
+        "source": "exa",
+        "ok": True,
+        "results": [{**_row("https://a/1", 1, "x" * flow.SNIPPET_CHARS), "title": "t", "engine": "exa"}],
+        "answer": None,
+        "reason": None,
+        "cost_usd": 0.005,
+    }
+    assert binding_calls.calls == [{"service": "exa", "proxy": "socks5://p:1"}]
+    assert client.calls == [
+        {
+            "url": "https://api.exa.ai/search",
+            "json": {"query": "q", "numResults": 1, "contents": {"text": {"maxCharacters": flow.SNIPPET_CHARS}}},
+            "headers": {"x-api-key": "k", "User-Agent": flow.UA},
+        }
+    ]
 
 
 async def test_exa_reports_a_block_a_http_error_and_a_transport_failure(monkeypatch) -> None:
     _key(monkeypatch)
     _client(monkeypatch, FakeResponse(403, {"costDollars": {"total": 0.001}}))
-    assert (await flow.exa("q", top=1))["reason"] == "blocked"
+    assert await flow.exa("q", top=1) == flow._failed("exa", "blocked", cost_usd=0.001)
+    _client(monkeypatch, FakeResponse(401, {}))
+    assert await flow.exa("q", top=1) == flow._failed("exa", "blocked")
     _client(monkeypatch, FakeResponse(500, {}))
-    assert (await flow.exa("q", top=1))["reason"] == "http:500"
+    assert await flow.exa("q", top=1) == flow._failed("exa", "http:500")
     _client(monkeypatch, FakeResponse(200, {}), error=httpx.ConnectError("down"))
-    assert (await flow.exa("q", top=1))["reason"] == "error:ConnectError"
+    assert await flow.exa("q", top=1) == flow._failed("exa", "error:ConnectError")
+    _client(monkeypatch, FakeResponse(200, "not a dict"))  # a page instead of JSON: an empty body, not a crash
+    assert await flow.exa("q", top=1) == flow._failed("exa", "empty")
 
 
 async def test_exa_with_no_results_is_empty(monkeypatch) -> None:
@@ -605,30 +665,75 @@ async def test_tavily_answers_with_its_pick_and_the_written_answer(monkeypatch) 
     }
     client = _client(monkeypatch, FakeResponse(200, body))
     found = await flow.tavily("q", top=2)
-    assert (found["answer"], found["results"][0]["snippet"], found["cost_usd"]) == ("short answer", "text", 0.001)
-    assert client.calls[0]["json"]["max_results"] == 2
-    assert client.calls[0]["json"]["include_answer"] is True
+    assert found == {
+        "source": "tavily",
+        "ok": True,
+        "results": [{**_row("https://b/2", 1, "text"), "title": "t", "engine": "tavily"}],
+        "answer": "short answer",
+        "reason": None,
+        "cost_usd": 0.001,
+    }
+    assert client.calls == [
+        {
+            "url": "https://api.tavily.com/search",
+            "json": {"query": "q", "max_results": 2, "include_answer": True, "search_depth": "basic"},
+            "headers": {"Authorization": "Bearer k", "User-Agent": flow.UA},
+        }
+    ]
 
 
 async def test_tavily_without_a_key_a_block_and_a_rate_limit(monkeypatch) -> None:
     _key(monkeypatch, "")
     assert await flow.tavily("q", top=1) == flow._failed("tavily", "no_key")
     _key(monkeypatch)
-    _client(monkeypatch, FakeResponse(429, {}))
-    assert (await flow.tavily("q", top=1))["reason"] == "blocked"
+    _client(monkeypatch, FakeResponse(429, {"usage": {"credits": 2}}))
+    assert await flow.tavily("q", top=1) == flow._failed("tavily", "blocked", cost_usd=0.002)
     _client(monkeypatch, FakeResponse(400, {}))
-    assert (await flow.tavily("q", top=1))["reason"] == "http:400"
+    assert await flow.tavily("q", top=1) == flow._failed("tavily", "http:400")
     _client(monkeypatch, FakeResponse(200, {"results": []}))
-    assert (await flow.tavily("q", top=1))["reason"] == "empty"
+    assert await flow.tavily("q", top=1) == flow._failed("tavily", "empty")
 
 
 async def test_the_html_of_a_page_comes_from_spider_first(monkeypatch) -> None:
     page = {"html": "<html>ok</html>", "seo": {"title": "T"}}
-    monkeypatch.setattr(flow.subprocess, "run", FakeProcess(0, json.dumps(page)))
+    process = FakeProcess(0, json.dumps(page))
+    monkeypatch.setattr(flow.subprocess, "run", process)
     client = _client(monkeypatch, FakeResponse(500, {}, text="fallback"))
     found = await flow._html("https://a/1", proxy="socks5://p:1")
     assert found == {"html": "<html>ok</html>", "title": "T", "source": "spider"}
+    assert process.calls == [
+        {
+            "argv": [
+                "spider",
+                "fetch",
+                "https://a/1",
+                "--json",
+                "--include",
+                "html",
+                "--set",
+                "crawl.proxy_urls=socks5://p:1",
+            ],
+            "capture_output": True,
+            "text": True,
+            "timeout": flow.TIMEOUT * 3,
+            "check": False,
+        }
+    ]
     assert client.calls == []  # the plain GET was not needed
+
+
+async def test_the_html_asks_for_the_proxy_only_when_there_is_one(monkeypatch) -> None:
+    process = FakeProcess(0, json.dumps({"html": "<html>ok</html>"}))
+    monkeypatch.setattr(flow.subprocess, "run", process)
+    _client(monkeypatch, FakeResponse(500, {}, text="fallback"))
+    await flow._html("https://a/1", proxy=None)
+    assert process.calls[0]["argv"] == ["spider", "fetch", "https://a/1", "--json", "--include", "html"]
+
+
+async def test_a_spider_answer_without_html_falls_through(monkeypatch) -> None:
+    monkeypatch.setattr(flow.subprocess, "run", FakeProcess(0, json.dumps({"html": ""})))
+    _client(monkeypatch, FakeResponse(200, None, text="<html>direct</html>"))
+    assert (await flow._html("https://a/1", proxy=None))["source"] == "direct"
 
 
 async def test_the_html_falls_back_to_a_plain_get(monkeypatch) -> None:
@@ -656,3 +761,265 @@ async def test_the_main_text_fails_with_the_reason_of_the_fetch(monkeypatch) -> 
     monkeypatch.setattr(flow.adapters, "spider", blocked)
     found = await flow._main_text("https://a/1", proxy=None)
     assert (found["ok"], found["source"], found["reason"]) == (False, "none", "blocked")
+
+
+async def test_the_direct_fetch_carries_the_user_agent_and_the_proxy(monkeypatch) -> None:
+    monkeypatch.setattr(flow.subprocess, "run", FakeProcess(raises=FileNotFoundError()))
+    client = _client(monkeypatch, FakeResponse(200, None, text="<html>direct</html>"))
+    found = await flow._html("https://a/1", proxy="socks5://p:1")
+    assert found == {"html": "<html>direct</html>", "title": None, "source": "direct"}
+    assert client.init == {
+        "timeout": flow.TIMEOUT,
+        "proxy": "socks5://p:1",
+        "follow_redirects": True,
+        "trust_env": False,
+    }
+    assert client.calls == [{"url": "https://a/1", "headers": {"User-Agent": flow.UA}}]
+
+
+async def test_a_not_found_page_is_no_html(monkeypatch) -> None:
+    monkeypatch.setattr(flow.subprocess, "run", FakeProcess(raises=FileNotFoundError()))
+    _client(monkeypatch, FakeResponse(404, None, text="gone"))
+    assert await flow._html("https://a/1", proxy=None) == {}
+
+
+def _extract(text: str | None, seen: dict) -> object:
+    def extract(html: str, **kwargs: object) -> str | None:
+        seen.update({"html": html, **kwargs})
+        return text
+
+    return extract
+
+
+async def test_the_main_text_asks_trafilatura_for_the_article(monkeypatch) -> None:
+    seen: dict = {}
+    monkeypatch.setattr(flow.trafilatura, "extract", _extract("article text", seen))
+    calls: dict = {}
+
+    async def page(url: str, *, proxy: str | None = None) -> dict:
+        calls.update({"url": url, "proxy": proxy})
+        return {"html": "<html>h</html>", "title": "T", "source": "spider"}
+
+    monkeypatch.setattr(flow, "_html", page)
+    found = await flow._main_text("https://a/1", proxy="socks5://p:1")
+    assert seen == {
+        "html": "<html>h</html>",
+        "include_comments": False,
+        "include_tables": True,
+        "favor_precision": True,
+    }
+    assert calls == {"url": "https://a/1", "proxy": "socks5://p:1"}
+    assert found == document("https://a/1", source="spider", ok=True, text="article text", title="T", via="trafilatura")
+
+
+async def test_the_main_text_is_cut_at_the_ceiling(monkeypatch) -> None:
+    monkeypatch.setattr(flow.trafilatura, "extract", _extract("y" * (flow.MAX_TEXT + 50), {}))
+
+    async def page(*_args: object, **_kwargs: object) -> dict:
+        return {"html": "<html>h</html>", "title": None, "source": "spider"}
+
+    monkeypatch.setattr(flow, "_html", page)
+    found = await flow._main_text("https://a/1", proxy=None)
+    assert len(found["text"]) == flow.MAX_TEXT
+
+
+async def test_the_markdown_fallback_gets_the_proxy_and_says_so(monkeypatch) -> None:
+    monkeypatch.setattr(flow.trafilatura, "extract", _extract(None, {}))
+    seen: dict = {}
+
+    async def page(*_args: object, **_kwargs: object) -> dict:
+        return {"html": "<html/>", "title": None, "source": "spider"}
+
+    async def markdown(url: str, *, proxy: str | None = None) -> dict:
+        seen.update({"url": url, "proxy": proxy})
+        return document(url, source="spider", ok=True, text="md")
+
+    monkeypatch.setattr(flow, "_html", page)
+    monkeypatch.setattr(flow.adapters, "spider", markdown)
+    found = await flow._main_text("https://a/1", proxy="socks5://p:1")
+    assert (found["text"], found["via"], found["source"]) == ("md", "markdown", "spider")
+    assert seen == {"url": "https://a/1", "proxy": "socks5://p:1"}
+
+
+async def test_the_main_text_without_a_reason_says_empty_text(monkeypatch) -> None:
+    async def page(*_args: object, **_kwargs: object) -> dict:
+        return {}
+
+    async def blocked(*_args: object, **_kwargs: object) -> dict:
+        return {"ok": False, "reason": None}
+
+    monkeypatch.setattr(flow, "_html", page)
+    monkeypatch.setattr(flow.adapters, "spider", blocked)
+    found = await flow._main_text("https://a/1", proxy=None)
+    assert (found["ok"], found["reason"]) == (False, "empty_text")
+
+
+async def test_the_budget_exhausted_entry_is_exactly_this(monkeypatch) -> None:
+    monkeypatch.setitem(flow.SOURCES, "exa", FakeSource("exa", _answer("exa", [_row("https://a/1", 1)], cost=0.5)))
+    result = await flow.web_search(["first", "second"], mode="parallel", sources=["exa"], budget_usd=0.5)
+    assert result["queries"][1] == {
+        "query": "second",
+        "ok": False,
+        "reason": "budget_exhausted",
+        "results": [],
+        "tried": [],
+    }
+
+
+async def test_fetch_top_counts_the_cost_of_the_pages(monkeypatch) -> None:
+    monkeypatch.setitem(flow.SOURCES, "serp", FakeSource("serp", _answer("serp", [_row("https://a/1", 1)])))
+
+    async def page(url: str, *, proxy: str | None = None) -> dict:
+        return document(url, source="exa", ok=True, text="page", cost_usd=0.25)
+
+    monkeypatch.setattr(flow, "_main_text", page)
+    result = await flow.web_search(["q"], sources=["serp"], fetch_top=1)
+    entry = result["queries"][0]
+    assert [doc["url"] for doc in entry["documents"]] == ["https://a/1"]
+    assert result["budget_spent_usd"] == 0.25
+
+
+async def test_the_http_clients_of_exa_and_tavily_get_the_timeout_and_the_proxy(monkeypatch) -> None:
+    _key(monkeypatch)
+    exa_client = _client(monkeypatch, FakeResponse(200, {"results": [{"url": "https://a/1"}], "costDollars": {}}))
+    await flow.exa("q", top=1, proxy="socks5://p:1")
+    assert exa_client.init == {"timeout": flow.TIMEOUT, "proxy": "socks5://p:1", "trust_env": False}
+    tavily_client = _client(monkeypatch, FakeResponse(200, {"results": [{"url": "https://a/1"}]}))
+    await flow.tavily("q", top=1, proxy="socks5://p:2")
+    assert tavily_client.init == {"timeout": flow.TIMEOUT, "proxy": "socks5://p:2", "trust_env": False}
+
+
+async def test_tavily_asks_for_its_own_key_and_reports_a_transport_failure(monkeypatch) -> None:
+    binding_calls = _key(monkeypatch)
+    _client(monkeypatch, FakeResponse(200, {}), error=httpx.ConnectError("down"))
+    assert await flow.tavily("q", top=1, proxy="socks5://p:1") == flow._failed("tavily", "error:ConnectError")
+    assert binding_calls.calls == [{"service": "tavily", "proxy": "socks5://p:1"}]
+
+
+async def test_serp_falls_back_to_the_asked_engine_when_a_row_has_none(monkeypatch) -> None:
+    envelope = {"ok": True, "results": [{"url": "https://a/1", "title": "t"}]}
+    monkeypatch.setattr(flow.subprocess, "run", FakeProcess(0, json.dumps(envelope)))
+    found = await flow.serp("q", top=10, engine="google")
+    assert found["results"][0]["engine"] == "google"
+
+
+async def test_serp_takes_the_currency_of_its_sources_on_a_failure_too(monkeypatch) -> None:
+    envelope = {"ok": False, "error": {"code": "PROVIDER_ERROR"}, "sources": [{"cost_currency": "RUB"}]}
+    monkeypatch.setattr(flow.subprocess, "run", FakeProcess(5, json.dumps(envelope)))
+    assert await flow.serp("q", top=10) == flow._failed("serp", "PROVIDER_ERROR", cost_currency="RUB")
+
+
+async def test_serp_trusts_the_exit_code_even_when_the_body_says_ok(monkeypatch) -> None:
+    envelope = {"ok": True, "results": [{"url": "https://a/1"}]}
+    monkeypatch.setattr(flow.subprocess, "run", FakeProcess(5, json.dumps(envelope)))
+    assert (await flow.serp("q", top=10))["ok"] is False
+
+
+async def test_a_page_answered_with_a_client_error_is_no_html(monkeypatch) -> None:
+    monkeypatch.setattr(flow.subprocess, "run", FakeProcess(raises=FileNotFoundError()))
+    _client(monkeypatch, FakeResponse(400, None, text="bad request"))
+    assert await flow._html("https://a/1", proxy=None) == {}
+
+
+async def test_the_envelope_of_the_workflow_is_exactly_this(monkeypatch) -> None:
+    monkeypatch.setitem(flow.SOURCES, "serp", FakeSource("serp", _answer("serp", [_row("https://a/1", 1)], cost=0.25)))
+    result = await flow.web_search(["q"], mode="parallel", sources=["serp"], top=3, engine="google", proxy="socks5://p")
+    assert set(result) == {"queries", "mode", "sources", "budget_spent_usd", "ok"}
+    assert (result["mode"], result["sources"], result["budget_spent_usd"], result["ok"]) == (
+        "parallel",
+        ["serp"],
+        0.25,
+        True,
+    )
+
+
+async def test_serp_keeps_the_engine_the_row_names(monkeypatch) -> None:
+    envelope = {"ok": True, "results": [{"url": "https://a/1", "searchengine": "google"}]}
+    monkeypatch.setattr(flow.subprocess, "run", FakeProcess(0, json.dumps(envelope)))
+    found = await flow.serp("q", top=10, engine="yandex")
+    assert found["results"][0]["engine"] == "google"  # the row wins over the question
+
+
+async def test_serp_empty_keeps_the_currency_of_the_answer(monkeypatch) -> None:
+    envelope = {"ok": True, "results": [], "sources": [{"cost_currency": "RUB"}], "cost_total": 0.0}
+    monkeypatch.setattr(flow.subprocess, "run", FakeProcess(0, json.dumps(envelope)))
+    assert await flow.serp("q", top=10) == flow._failed("serp", "empty", cost_currency="RUB")
+
+
+async def test_a_paid_answer_keeps_its_cost_on_the_failure_path(monkeypatch) -> None:
+    _key(monkeypatch)
+    _client(monkeypatch, FakeResponse(500, {"costDollars": {"total": 0.002}}))
+    assert await flow.exa("q", top=1) == flow._failed("exa", "http:500", cost_usd=0.002)
+    _client(monkeypatch, FakeResponse(200, {"results": [], "costDollars": {"total": 0.003}}))
+    assert await flow.exa("q", top=1) == flow._failed("exa", "empty", cost_usd=0.003)
+    _client(monkeypatch, FakeResponse(500, {"usage": {"credits": 2}}))
+    assert await flow.tavily("q", top=1) == flow._failed("tavily", "http:500", cost_usd=0.002)
+    _client(monkeypatch, FakeResponse(200, {"results": [], "usage": {"credits": 3}}))
+    assert await flow.tavily("q", top=1) == flow._failed("tavily", "empty", cost_usd=0.003)
+
+
+async def test_the_budget_skips_every_remaining_query(monkeypatch) -> None:
+    monkeypatch.setitem(flow.SOURCES, "exa", FakeSource("exa", _answer("exa", [_row("https://a/1", 1)], cost=0.5)))
+    result = await flow.web_search(["a", "b", "c"], mode="parallel", sources=["exa"], budget_usd=0.5)
+    assert [entry.get("reason") for entry in result["queries"]] == [None, "budget_exhausted", "budget_exhausted"]
+
+
+async def test_the_failed_fetch_is_a_document_of_its_url(monkeypatch) -> None:
+    async def page(*_args: object, **_kwargs: object) -> dict:
+        return {}
+
+    async def blocked(*_args: object, **_kwargs: object) -> dict:
+        return {"ok": False, "reason": "blocked"}
+
+    monkeypatch.setattr(flow, "_html", page)
+    monkeypatch.setattr(flow.adapters, "spider", blocked)
+    found = await flow._main_text("https://a/1", proxy=None)
+    assert found == document("https://a/1", source="none", ok=False, reason="blocked")
+
+
+async def test_fetch_top_passes_the_proxy_and_counts_every_cost(monkeypatch) -> None:
+    results = [_row("https://a/1", 1), _row("https://b/2", 2)]
+    monkeypatch.setitem(flow.SOURCES, "serp", FakeSource("serp", _answer("serp", results, cost=0.25)))
+    seen: list[dict] = []
+
+    async def page(url: str, *, proxy: str | None = None) -> dict:
+        seen.append({"url": url, "proxy": proxy})
+        return document(url, source="exa", ok=True, text="page", cost_usd=0.5 if url.endswith("1") else None)
+
+    monkeypatch.setattr(flow, "_main_text", page)
+    result = await flow.web_search(["q"], sources=["serp"], fetch_top=2, proxy="socks5://p:1")
+    entry = result["queries"][0]
+    assert seen == [
+        {"url": "https://a/1", "proxy": "socks5://p:1"},
+        {"url": "https://b/2", "proxy": "socks5://p:1"},
+    ]
+    assert set(entry) == {"query", "ok", "mode", "source", "results", "answer", "tried", "cost_usd", "documents"}
+    assert result["budget_spent_usd"] == 0.75  # the source plus the page, and a page without a cost adds nothing
+
+
+async def test_fetch_top_rounds_the_total_like_the_rest(monkeypatch) -> None:
+    monkeypatch.setitem(flow.SOURCES, "serp", FakeSource("serp", _answer("serp", [_row("https://a/1", 1)])))
+
+    async def page(url: str, *, proxy: str | None = None) -> dict:
+        return document(url, source="exa", ok=True, text="page", cost_usd=4e-07)
+
+    monkeypatch.setattr(flow, "_main_text", page)
+    result = await flow.web_search(["q"], sources=["serp"], fetch_top=1)
+    assert result["budget_spent_usd"] == 0.0
+
+async def test_exa_treats_400_as_an_http_failure(monkeypatch) -> None:
+    _key(monkeypatch)
+    _client(monkeypatch, FakeResponse(400, {}))
+    assert await flow.exa("q", top=1) == flow._failed("exa", "http:400")
+
+async def test_a_result_without_a_text_has_no_snippet(monkeypatch) -> None:
+    _key(monkeypatch)
+    _client(monkeypatch, FakeResponse(200, {"results": [{"url": "https://a/1"}]}))
+    assert (await flow.exa("q", top=1))["results"][0]["snippet"] is None
+    _client(monkeypatch, FakeResponse(200, {"results": [{"url": "https://a/1"}]}))
+    assert (await flow.tavily("q", top=1))["results"][0]["snippet"] is None
+
+async def test_a_non_textual_answer_is_no_answer(monkeypatch) -> None:
+    _key(monkeypatch)
+    _client(monkeypatch, FakeResponse(200, {"results": [{"url": "https://a/1"}], "answer": {"not": "text"}}))
+    assert (await flow.tavily("q", top=1))["answer"] is None

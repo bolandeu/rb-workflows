@@ -128,7 +128,7 @@ async def serp_impl(query: str, *, top: int, engine: str = "yandex", proxy: str 
     }
 
 
-async def exa_impl(query: str, *, top: int, engine: str = "yandex", proxy: str | None = None) -> dict:
+async def exa_impl(query: str, *, top: int, proxy: str | None = None, **_kwargs: object) -> dict:
     """Exa `/search`: their own pick, billed per call (`costDollars.total`)."""
     api_key, proxy = binding("exa", proxy=proxy)
     if not api_key:
@@ -157,7 +157,7 @@ async def exa_impl(query: str, *, top: int, engine: str = "yandex", proxy: str |
     return {"source": "exa", "ok": True, "results": rows, "answer": None, "reason": None, "cost_usd": cost}
 
 
-async def tavily_impl(query: str, *, top: int, engine: str = "yandex", proxy: str | None = None) -> dict:
+async def tavily_impl(query: str, *, top: int, proxy: str | None = None, **_kwargs: object) -> dict:
     """Tavily `/search`: their pick plus a written answer when the account returns one; billed in credits."""
     api_key, proxy = binding("tavily", proxy=proxy)
     if not api_key:
