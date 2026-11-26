@@ -1,8 +1,9 @@
 """The answers of the external services, kept so a second run costs nothing.
 
-A task at Arsenkin costs limits, so its `get` payload is stored as it came: the key is the tool and the request body
-(exactly what decides the answer), the value the service's own reply. `--cache` reads that row instead of placing the
-task again, and `--max-age` refuses a row that is older than asked.
+A task at Arsenkin costs limits and a page through `exa` costs money, so the answer is stored as it came: the key is
+the tool and the request body (exactly what decides the answer), the value what the caller would have got. A second
+run reads that row instead of paying again — that is the default, `--force` asks the services anyway — and `--max-age`
+refuses a row that is older than asked. The row is written either way: a forced run replaces the stale answer.
 
 Where the rows live:
 
@@ -25,7 +26,7 @@ from pathlib import Path
 
 import platformdirs
 
-__all__ = ["ENV_VAR", "key", "load", "save"]
+__all__ = ["ENV_VAR", "key", "load", "lookup", "save"]
 
 APP = "rb-workflows"
 ENV_VAR = "WORKFLOWS_DATABASE_URL"
@@ -93,6 +94,11 @@ def save(kind: str, request: Mapping, payload: Mapping) -> bool:
         return True
     except Exception:  # a broken cache is not a broken task: the caller just pays for the call again
         return False
+
+
+def lookup(kind: str, request: Mapping, *, max_age: str | None = None, force: bool = False) -> dict | None:
+    """The stored answer, unless `force` wants the services asked again."""
+    return None if force else load(kind, request, max_age=max_age)
 
 
 def load(kind: str, request: Mapping, *, max_age: str | None = None) -> dict | None:

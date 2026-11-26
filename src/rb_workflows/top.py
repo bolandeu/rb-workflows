@@ -176,6 +176,7 @@ async def collect(
     provider: str | None = None,
     cache: bool = False,
     max_age: str | None = None,
+    force: bool = False,
 ) -> dict:
     """Run one `check-top` task through `source` and return the report in Arsenkin's shape plus the summary.
 
@@ -183,6 +184,7 @@ async def collect(
         request: the full body or the bare `data`; see the module docstring for the accepted keys.
         source: `serp` (our CLI, the default) or `arsenkin` (their task API).
         top_n: how many rows of the summary to show; the full ranking stays in `summary.rows` order.
+        force: ask the source again even when the very same report is already stored (the row is replaced).
 
     A query or an engine the source cannot answer contributes an empty list, never an exception: the report says
     `ok: false` only when the whole call failed, and `skipped` names the engine indices nobody was asked about.
@@ -194,16 +196,14 @@ async def collect(
     if source not in SOURCE_NAMES:
         raise ValueError(f"unknown source '{source}'; known: {', '.join(SOURCE_NAMES)}")
     data = normalise(request)
+    keyed = {"source": source, **data}
+    if (stored := cache_store.lookup("top", keyed, max_age=max_age, force=force)) is not None:
+        return {**stored, "cached": True}
     started = time.monotonic()
     skipped: list[int] = []
     task_id = None
-    cached = False
     if source == "arsenkin":
-        answer = cache_store.load("top", data, max_age=max_age) if cache else None
-        cached = answer is not None
-        if answer is None:
-            answer = await _from_arsenkin(data, token=token, poll_interval=poll_interval, timeout=timeout)
-            cache_store.save("top", data, answer)
+        answer = await _from_arsenkin(data, token=token, poll_interval=poll_interval, timeout=timeout)
         result = answer.get("result") or {}
         task_id = answer.get("task_id")
         collect_rows = _truncate(result.get("result", {}).get("collect") or _empty(data), data["depth"])
@@ -214,9 +214,8 @@ async def collect(
         collect_rows = _truncate(collect_rows, data["depth"])
     report = build_report(request=data, source=source, collect=collect_rows, top_n=top_n, task_id=task_id)
     report["skipped"] = skipped
-    if cached:
-        report["cached"] = True
     report["elapsed_s"] = round(time.monotonic() - started, 1)
+    cache_store.save("top", keyed, report)
     return report
 
 

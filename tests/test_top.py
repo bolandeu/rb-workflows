@@ -341,3 +341,22 @@ def test_the_serp_provider_queue_and_the_journal_flags_reach_the_cli(monkeypatch
     assert argv[argv.index("--provider") : argv.index("--provider") + 2] == ["--provider", "xmlriver,xmlstock"]
     assert "--cache" in argv
     assert argv[argv.index("--max-age") : argv.index("--max-age") + 2] == ["--max-age", "7d"]
+
+
+def test_the_report_is_stored_so_a_repeat_is_free_and_force_asks_again(monkeypatch) -> None:
+    asked: list[dict] = []
+
+    async def fake_from_serp(data, **_):
+        asked.append(dict(data))
+        return [[["https://a.example/1"]]], []
+
+    monkeypatch.setattr(top, "_from_serp", fake_from_serp)
+    request = {"queries": ["q"], "se": [{"type": 1, "region": 213}], "depth": 10}
+
+    first = asyncio.run(top.collect(request))
+    again = asyncio.run(top.collect(request))
+    forced = asyncio.run(top.collect(request, force=True))
+
+    assert len(asked) == 2, "the repeat must not reach the source at all"
+    assert again["cached"] is True and "cached" not in first and "cached" not in forced
+    assert again["result"] == first["result"] == forced["result"]

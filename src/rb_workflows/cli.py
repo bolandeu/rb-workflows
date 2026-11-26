@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 from typing import NoReturn
 
+from . import cache as cache_store
 from .flows.web_fetch import web_fetch
 from .flows.web_search import web_search
 from .version import version
@@ -20,14 +21,26 @@ from .version import version
 __all__ = ["main", "run"]
 
 WORKFLOWS = {"web-fetch": web_fetch, "web-search": web_search}
+# The flags that steer the cache: they are not part of a workflow's input, so they never reach the workflow itself.
+CACHE_FLAGS = ("force", "max_age")
 
 
 def run(name: str, payload: dict) -> dict:
-    """Run one workflow with `payload` as its keyword input, synchronously."""
+    """Run one workflow with `payload` as its keyword input, synchronously — or answer it from the cache.
+
+    A stored answer is what makes a second run free: the key is the workflow and its input, so a changed input is
+    another question. `force` asks the services again and replaces the row; `max_age` refuses a row older than asked.
+    """
     workflow = WORKFLOWS.get(name)
     if workflow is None:
         raise SystemExit(f"unknown workflow '{name}'; known: {', '.join(WORKFLOWS)}")
-    return asyncio.run(workflow(**payload))
+    request = {key: value for key, value in payload.items() if key not in CACHE_FLAGS}
+    stored = cache_store.lookup(name, request, max_age=payload.get("max_age"), force=bool(payload.get("force")))
+    if stored is not None:
+        return {**stored, "cached": True}
+    result = asyncio.run(workflow(**request))
+    cache_store.save(name, request, result)
+    return result
 
 
 class _Parser(argparse.ArgumentParser):
@@ -45,6 +58,8 @@ def _add_fetch_args(cmd: argparse.ArgumentParser) -> None:
     cmd.add_argument("--budget-usd", type=float, help="spend ceiling for the whole run")
     cmd.add_argument("--proxy", help="proxy for every step (overrides the key's own binding)")
     cmd.add_argument("--steps", nargs="+", help="limit the cascade, e.g. --steps exa direct")
+    cmd.add_argument("--force", action="store_true", help="ignore the stored answer and ask the services again")
+    cmd.add_argument("--max-age", help="the oldest stored answer to accept, e.g. 7d")
     cmd.add_argument("--json", action="store_true", help="print the result as JSON (the contract)")
 
 
@@ -63,6 +78,8 @@ def _add_search_args(cmd: argparse.ArgumentParser) -> None:
     cmd.add_argument("--fetch-top", type=int, help="also bring back the main text of the first N pages")
     cmd.add_argument("--budget-usd", type=float, help="spend ceiling over the USD the sources charge")
     cmd.add_argument("--proxy", help="proxy for every call (overrides the key's own binding)")
+    cmd.add_argument("--force", action="store_true", help="ignore the stored answer and ask the services again")
+    cmd.add_argument("--max-age", help="the oldest stored answer to accept, e.g. 7d")
     cmd.add_argument("--json", action="store_true", help="the report as JSON (the contract)")
 
 
@@ -137,7 +154,8 @@ def _parser() -> argparse.ArgumentParser:
     top_cmd.add_argument("--source", default="serp", choices=("serp", "arsenkin"), help="who answers (default: serp)")
     top_cmd.add_argument("--provider", help="with --source serp: the provider queue, e.g. xmlriver,xmlstock")
     top_cmd.add_argument("--cache", action="store_true", help="with --source serp: take the answer from the journal")
-    top_cmd.add_argument("--max-age", help="with --cache: the oldest journal answer to accept, e.g. 7d")
+    top_cmd.add_argument("--max-age", help="the oldest stored answer to accept, e.g. 7d")
+    top_cmd.add_argument("--force", action="store_true", help="ignore the stored answer and ask the source again")
     top_cmd.add_argument("--top-n", type=int, default=10, help="rows of the strength summary to show")
     top_cmd.add_argument("--concurrency", type=int, default=3, help="queries in flight at once (source=serp)")
     top_cmd.add_argument(
@@ -218,7 +236,8 @@ def _parser() -> argparse.ArgumentParser:
     )
     word.add_argument("--provider", help="with --source wordstat: the provider queue, e.g. xmlriver,xmlstock")
     word.add_argument("--cache", action="store_true", help="with --source wordstat: take the answer from the journal")
-    word.add_argument("--max-age", help="with --cache: the oldest journal answer to accept, e.g. 7d")
+    word.add_argument("--max-age", help="the oldest stored answer to accept, e.g. 7d")
+    word.add_argument("--force", action="store_true", help="ignore the stored answer and ask the source again")
     word.add_argument("--concurrency", type=int, default=5, help="queries in flight at once (source=wordstat, type 2)")
     word.add_argument("--timeout", type=float, default=3600.0, help="seconds the whole task may take (source=arsenkin)")
     word.add_argument(
@@ -298,6 +317,8 @@ _FETCH_OPTIONS = [
     _param("--budget-usd", "float"),
     _param("--proxy", "str"),
     _param("--steps", "str", multiple=True),
+    _param("--force", "boolean", False),
+    _param("--max-age", "str"),
     _JSON_OPTION,
 ]
 
@@ -343,6 +364,8 @@ DESCRIBE = {
                     _param("--fetch-top", "int", 0),
                     _param("--budget-usd", "float"),
                     _param("--proxy", "str"),
+                    _param("--force", "boolean", False),
+                    _param("--max-age", "str"),
                     _JSON_OPTION,
                 ],
             },
@@ -391,6 +414,7 @@ DESCRIBE = {
                     _param("--provider", "str"),
                     _param("--cache", "boolean", False),
                     _param("--max-age", "str"),
+                    _param("--force", "boolean", False),
                     _param("--top-n", "int", 10),
                     _param("--concurrency", "int", 3),
                     _param("--timeout", "float", 3600.0),
@@ -445,6 +469,7 @@ DESCRIBE = {
                     _param("--provider", "str"),
                     _param("--cache", "boolean", False),
                     _param("--max-age", "str"),
+                    _param("--force", "boolean", False),
                     _param("--concurrency", "int", 5),
                     _param("--timeout", "float", 3600.0),
                     _param("--poll-interval", "float", 15.0),
@@ -586,6 +611,8 @@ def _search_cmd(args: argparse.Namespace) -> int:
         "fetch_top": args.fetch_top,
         "budget_usd": args.budget_usd,
         "proxy": args.proxy,
+        "force": args.force,
+        "max_age": args.max_age,
     }
     payload |= {key: value for key, value in flags.items() if value is not None}
     if args.sources:
@@ -610,7 +637,14 @@ def _search_cmd(args: argparse.Namespace) -> int:
 def _fetch_cmd(args: argparse.Namespace) -> int:
     """`web-fetch`: the flags of `_add_fetch_args` build the payload, `--input` merges over them."""
     payload: dict = _payload(args)
-    imports = {"urls": args.urls, "budget_usd": args.budget_usd, "proxy": args.proxy, "steps": args.steps}
+    imports = {
+        "urls": args.urls,
+        "budget_usd": args.budget_usd,
+        "proxy": args.proxy,
+        "steps": args.steps,
+        "force": args.force,
+        "max_age": args.max_age,
+    }
     payload |= {key: value for key, value in imports.items() if value is not None}
     if "urls" not in payload:
         _invalid("nothing to fetch: pass --urls or --input '{\"urls\": [...]}'")
@@ -823,6 +857,7 @@ def _wordstat(args: argparse.Namespace) -> int:
             provider=args.provider,
             cache=args.cache,
             max_age=args.max_age,
+            force=args.force,
             concurrency=args.concurrency,
             poll_interval=args.poll_interval,
             timeout=args.timeout,
@@ -1019,6 +1054,10 @@ def _top(args: argparse.Namespace) -> int:
             poll_interval=args.poll_interval,
             timeout=args.timeout,
             top_n=args.top_n,
+            provider=args.provider,
+            cache=args.cache,
+            max_age=args.max_age,
+            force=args.force,
         )
     )
     if args.json:

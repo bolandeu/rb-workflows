@@ -149,3 +149,14 @@ def test_the_spider_step_asks_for_the_content_and_ignores_env_proxies(monkeypatc
     assert seen["argv"][:5] == ["spider", "fetch", "https://a.example/x", "--json", "--include"]
     assert "crawl.proxy_urls=socks5://p:1" in seen["argv"]
     assert "env" not in seen  # inherited as is: spider itself keeps `trust_env` off and picks a writable cache
+
+
+def test_a_repeat_run_answers_from_the_cache_and_force_asks_the_steps_again(cascade) -> None:
+    urls = ["https://a.example/good"]
+    first = cli.run("web-fetch", {"urls": urls})
+    again = cli.run("web-fetch", {"urls": urls})
+    forced = cli.run("web-fetch", {"urls": urls, "force": True})
+
+    assert "cached" not in first and again["cached"] is True
+    assert again["documents"] == first["documents"] == forced["documents"]
+    assert _asked(cascade["spider"]) == ["good", "good"]  # the repeat paid nothing; the forced run asked again

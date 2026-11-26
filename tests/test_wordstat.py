@@ -273,3 +273,22 @@ def test_a_frequency_our_cli_spells_with_an_underscore_is_still_read(monkeypatch
         )
     )
     assert report["result"]["data"]["result"]["таможенное оформление"]["213"] == {"exact": 100}
+
+
+def test_the_report_is_stored_so_a_repeat_is_free_and_force_asks_again(monkeypatch) -> None:
+    asked: list[dict] = []
+
+    async def fake_frequencies(data, **_):
+        asked.append(dict(data))
+        return {data["queries"][0]: {"213": {"base": 7}}}, None
+
+    monkeypatch.setattr(wordstat, "_frequencies", fake_frequencies)
+    request = {"type": 1, "queries": ["ремонт киа"], "regions": [213], "ws": ["base"]}
+
+    first = _run(wordstat.collect(request))
+    again = _run(wordstat.collect(request))
+    forced = _run(wordstat.collect(request, force=True))
+
+    assert len(asked) == 2, "the repeat must not reach the source at all"
+    assert again["cached"] is True and "cached" not in first and "cached" not in forced
+    assert again["result"] == first["result"] == forced["result"]

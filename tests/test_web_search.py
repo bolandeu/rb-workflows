@@ -1007,10 +1007,12 @@ async def test_fetch_top_rounds_the_total_like_the_rest(monkeypatch) -> None:
     result = await flow.web_search(["q"], sources=["serp"], fetch_top=1)
     assert result["budget_spent_usd"] == 0.0
 
+
 async def test_exa_treats_400_as_an_http_failure(monkeypatch) -> None:
     _key(monkeypatch)
     _client(monkeypatch, FakeResponse(400, {}))
     assert await flow.exa("q", top=1) == flow._failed("exa", "http:400")
+
 
 async def test_a_result_without_a_text_has_no_snippet(monkeypatch) -> None:
     _key(monkeypatch)
@@ -1018,6 +1020,7 @@ async def test_a_result_without_a_text_has_no_snippet(monkeypatch) -> None:
     assert (await flow.exa("q", top=1))["results"][0]["snippet"] is None
     _client(monkeypatch, FakeResponse(200, {"results": [{"url": "https://a/1"}]}))
     assert (await flow.tavily("q", top=1))["results"][0]["snippet"] is None
+
 
 async def test_a_non_textual_answer_is_no_answer(monkeypatch) -> None:
     _key(monkeypatch)

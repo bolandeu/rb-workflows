@@ -389,6 +389,7 @@ async def collect(
     concurrency: int = 5,
     poll_interval: float = 15.0,
     timeout: float = 3600.0,
+    force: bool = False,
 ) -> dict:
     """Run one `wordstat` task through `source` and return the report in the documented shape.
 
@@ -396,6 +397,7 @@ async def collect(
         request: the full body or the bare `data`; see the module docstring for both types.
         source: `wordstat` (our CLI, the default) or `arsenkin` (their task API).
         provider, cache, max_age: forwarded to our CLI unchanged (source `wordstat` only).
+        force: ask the source again even when the very same report is already stored (the row is replaced).
 
     A region or a query the source could not answer lands in `warning`; the rest of the batch is still a report.
     """
@@ -405,15 +407,13 @@ async def collect(
     if source not in SOURCES:
         raise ValueError(f"unknown source '{source}'; known: {', '.join(SOURCES)}")
     data = normalise(request)
+    keyed = {"source": source, **data}
+    if (stored := cache_store.lookup(TOOLS_NAME, keyed, max_age=max_age, force=force)) is not None:
+        return {**stored, "cached": True}
     if source == "arsenkin":
-        payload = cache_store.load(TOOLS_NAME, data, max_age=max_age) if cache else None
-        cached = payload is not None
-        if payload is None:
-            payload = await _payload_from_arsenkin(data, token=token, poll_interval=poll_interval, timeout=timeout)
-            cache_store.save(TOOLS_NAME, data, payload)
+        payload = await _payload_from_arsenkin(data, token=token, poll_interval=poll_interval, timeout=timeout)
         report = report_from_remote(payload, data)
-        if cached:
-            report["cached"] = True
+        cache_store.save(TOOLS_NAME, keyed, report)
         return report
     started = time.monotonic()
     if data["type"] == 1:
@@ -423,6 +423,7 @@ async def collect(
         rows, warning = await _phrases(data, provider=provider, cache=cache, max_age=max_age, concurrency=concurrency)
         report = build_report(request=data, source=source, rows=rows, warning=warning)
     report["elapsed_s"] = round(time.monotonic() - started, 1)
+    cache_store.save(TOOLS_NAME, keyed, report)
     return report
 
 
