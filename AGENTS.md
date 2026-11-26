@@ -107,7 +107,17 @@ search`, группировка по пересечению URL: `hard` — не
 
 ```sh
 uv sync
-uv run pytest -q
+uv run pytest -q                    # обычный прогон: сеть и деньги не трогает
+uv run pytest -m live -q            # живые вызовы: настоящий serp CLI и настоящая trafilatura, тратит деньги
 uv run ruff check . && uv run ty check
+uv run mutmut run                   # мутации одного модуля (source_paths + only_mutate в pyproject)
+# выжившие по имени: uv run mutmut run <имя> — перегоняет именно их, кэш остальных не трогает
 wf web-fetch --urls https://example.com --json
 ```
+
+`tests/test_windmill.py` держит контракт Windmill и поверхность CLI: каждый воркфлоу — `@workflow`, каждый шаг —
+`@task`, у каждой команды есть `--help`, все команды видны в bare-help и в `describe`, пустой вызов и неизвестная
+опция отвечают конвертом `INVALID_ARGUMENTS` с exit 2.
+
+Мутации `flows/web_search.py`: эквивалентный мутант один — `entry["best_position"] or 0` в ключе сортировки
+(`_merge`): позиции 1-based, `0` и `1` там неразличимы. Остальные либо убиты, либо не порождаются.

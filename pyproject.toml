@@ -68,9 +68,11 @@ addopts = "-m 'not live'"  # `live` spends money on the real services: `uv run p
 markers = ["live: talks to the real services (the serp CLI, the network); excluded from the default run"]
 
 [tool.mutmut]
-# One module per run: the whole package is hours. Widen `source_paths` when a module gets its own test file.
-source_paths = ["src/rb_workflows/flows/web_search.py"]
+# The copy needs the whole package to import; `only_mutate` keeps the run to one module. Widen it per run.
+source_paths = ["src/rb_workflows"]
+only_mutate = ["*/flows/web_search.py"]
 pytest_add_cli_args_test_selection = ["tests/test_web_search.py"]
+cache_invalidation_files = ["tests/*.py", "pyproject.toml"]  # a changed test invalidates the cached verdicts
 
 [tool.rb.install]
 homeserver = ["rbtools"]

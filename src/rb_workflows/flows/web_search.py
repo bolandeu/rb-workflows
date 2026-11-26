@@ -19,6 +19,7 @@ import asyncio
 import json
 import subprocess
 from collections.abc import Awaitable, Callable
+from urllib.parse import urlsplit
 
 import httpx
 import trafilatura
@@ -68,13 +69,12 @@ def _row(url: str, title: str | None, snippet: str | None, position: int | None,
 
 
 def _domain(url: str) -> str | None:
-    without_scheme = url.split("://", 1)[-1]
-    host = without_scheme.split("/", 1)[0]
-    return host or None
+    """The host of a URL (with its port), with or without a scheme — `urlsplit` does the splitting, not us."""
+    parts = urlsplit(url if "://" in url else f"//{url}")
+    return parts.netloc or None
 
 
-@task
-async def serp(query: str, *, top: int, engine: str = "yandex", proxy: str | None = None) -> dict:
+async def serp_impl(query: str, *, top: int, engine: str = "yandex", proxy: str | None = None) -> dict:
     """`serp snippets --json`: the real SERP with snippets, billed by the CLI in rubles out of its own accounts.
 
     The keys of XMLRiver/XMLStock are the CLI's business (it works standalone too), so this source has no key of ours
@@ -128,8 +128,7 @@ async def serp(query: str, *, top: int, engine: str = "yandex", proxy: str | Non
     }
 
 
-@task
-async def exa(query: str, *, top: int, engine: str = "yandex", proxy: str | None = None) -> dict:
+async def exa_impl(query: str, *, top: int, engine: str = "yandex", proxy: str | None = None) -> dict:
     """Exa `/search`: their own pick, billed per call (`costDollars.total`)."""
     api_key, proxy = binding("exa", proxy=proxy)
     if not api_key:
@@ -158,8 +157,7 @@ async def exa(query: str, *, top: int, engine: str = "yandex", proxy: str | None
     return {"source": "exa", "ok": True, "results": rows, "answer": None, "reason": None, "cost_usd": cost}
 
 
-@task
-async def tavily(query: str, *, top: int, engine: str = "yandex", proxy: str | None = None) -> dict:
+async def tavily_impl(query: str, *, top: int, engine: str = "yandex", proxy: str | None = None) -> dict:
     """Tavily `/search`: their pick plus a written answer when the account returns one; billed in credits."""
     api_key, proxy = binding("tavily", proxy=proxy)
     if not api_key:
@@ -201,9 +199,6 @@ def _body(response: httpx.Response) -> dict:
     return body if isinstance(body, dict) else {}
 
 
-SOURCES: dict[str, Search] = {"serp": serp, "exa": exa, "tavily": tavily}
-
-
 def _merge(answers: list[dict]) -> list[dict]:
     """One row per URL: the sources it came from, the best position over them, and the first snippet found."""
     rows: dict[str, dict] = {}
@@ -233,7 +228,10 @@ def _merge(answers: list[dict]) -> list[dict]:
                 entry["best_position"] = row["position"]
                 entry["position"] = row["position"]
                 entry["title"] = row["title"] or entry["title"]
-    ordered = sorted(rows.values(), key=lambda entry: (-len(entry["sources"]), entry["best_position"] or 10**6))
+    ordered = sorted(
+        rows.values(),
+        key=lambda entry: (-len(entry["sources"]), entry["best_position"] is None, entry["best_position"] or 0),
+    )
     return ordered
 
 
@@ -329,11 +327,14 @@ async def _html(url: str, *, proxy: str | None) -> dict:
     return {"html": response.text, "title": None, "source": "direct"} if response.status_code < 400 else {}
 
 
-@task
-async def _main_text(url: str, *, proxy: str | None) -> dict:
+async def _main_text_impl(url: str, *, proxy: str | None) -> dict:
     """The page's own text: HTML through trafilatura, `spider`'s markdown when the extraction comes back empty."""
     page = await _html(url, proxy=proxy)
-    text = trafilatura.extract(page["html"], include_comments=False, include_tables=True, favor_precision=True)
+    text = (
+        trafilatura.extract(page["html"], include_comments=False, include_tables=True, favor_precision=True)
+        if page.get("html")
+        else None
+    )
     if text:
         return document(
             url, source=page["source"], ok=True, text=text[:MAX_TEXT], title=page["title"], via="trafilatura"
@@ -345,8 +346,7 @@ async def _main_text(url: str, *, proxy: str | None) -> dict:
     return document(url, source="none", ok=False, reason=found["reason"] or "empty_text")
 
 
-@workflow
-async def web_search(
+async def web_search_impl(
     queries: list[str],
     *,
     mode: str = "cascade",
@@ -402,3 +402,14 @@ async def web_search(
         "budget_spent_usd": round(spent, 6),
         "ok": any(entry["ok"] for entry in found),
     }
+
+
+# A decorated function is not mutated, so every step keeps its body plain and gets its wrapper here: mutmut sees the
+# mutants, Windmill still gets its `@task`, and a local call still crosses JSON exactly like a deployed one.
+serp = task(serp_impl)
+exa = task(exa_impl)
+tavily = task(tavily_impl)
+_main_text = task(_main_text_impl)
+web_search = workflow(web_search_impl)
+
+SOURCES: dict[str, Search] = {"serp": serp, "exa": exa, "tavily": tavily}
