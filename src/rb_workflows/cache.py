@@ -26,7 +26,7 @@ from pathlib import Path
 
 import platformdirs
 
-__all__ = ["ENV_VAR", "key", "load", "lookup", "save"]
+__all__ = ["ENV_VAR", "clear", "key", "load", "lookup", "save", "stats"]
 
 APP = "rb-workflows"
 ENV_VAR = "WORKFLOWS_DATABASE_URL"
@@ -138,3 +138,95 @@ def load(kind: str, request: Mapping, *, max_age: str | None = None) -> dict | N
         return json.loads(row["payload"])
     except Exception:  # an unreadable cache is a miss, never an error for the caller
         return None
+
+
+def _hidden(url: str) -> str:
+    """`postgresql://user:***@host/db` — where the cache lives, without the password in it."""
+    scheme, _, rest = url.partition("://")
+    head, at, tail = rest.rpartition("@")
+    if not at:
+        return url
+    user, colon, _ = head.partition(":")
+    return f"{scheme}://{user}{':***' if colon else ''}@{tail}"
+
+
+def _held(storage: str, location: str, entries: int, size_bytes: int, oldest: object, newest: object) -> dict:
+    def iso(value: object) -> str | None:
+        return None if value is None else str(getattr(value, "isoformat", lambda: value)())
+
+    return {
+        "storage": storage,
+        "location": location,
+        "entries": entries,
+        "size_bytes": size_bytes,
+        "oldest": iso(oldest),
+        "newest": iso(newest),
+    }
+
+
+def stats() -> dict:
+    """What the cache holds right now: where it lives, how many answers, how much room, how old the oldest is."""
+    if url := os.environ.get(ENV_VAR):
+        import psycopg
+
+        with psycopg.connect(url) as connection:
+            exists = connection.execute("select to_regclass('public.workflows_answers') is not null").fetchone()
+            if exists is None or not exists[0]:  # the table appears with the first save: unused is empty, not broken
+                return _held("postgres", _hidden(url), 0, 0, None, None)
+            row = connection.execute(
+                "select count(*), min(fetched_at), max(fetched_at), pg_total_relation_size('public.workflows_answers')"
+                " from public.workflows_answers"
+            ).fetchone()
+        if row is None:
+            return _held("postgres", _hidden(url), 0, 0, None, None)
+        entries, oldest, newest, size = row
+        return _held("postgres", _hidden(url), entries, size, oldest, newest)
+    path = _sqlite_path()
+    if not path.is_file():
+        return _held("sqlite", str(path), 0, 0, None, None)
+    import sqlite3
+
+    with sqlite3.connect(path) as base:
+        try:
+            entries, oldest, newest = base.execute(
+                "select count(*), min(fetched_at), max(fetched_at) from workflows_answers"
+            ).fetchone()
+        except sqlite3.OperationalError:  # no table yet: an empty cache
+            entries, oldest, newest = 0, None, None
+    return _held("sqlite", str(path), entries or 0, path.stat().st_size, oldest, newest)
+
+
+def clear(older_than: timedelta | None = None, *, dry_run: bool = False) -> int:
+    """Drop the answers older than the term — all of them when it is `None` — and say how many; `dry_run` only counts."""
+    if url := os.environ.get(ENV_VAR):
+        where, params = ("", ()) if older_than is None else (" where fetched_at < now() - %s", (older_than,))
+        import psycopg
+
+        with psycopg.connect(url) as connection:
+            exists = connection.execute("select to_regclass('public.workflows_answers') is not null").fetchone()
+            if exists is None or not exists[0]:
+                return 0
+            statement = "select count(*)" if dry_run else "delete"
+            answer = connection.execute(f"{statement} from public.workflows_answers{where}", params)
+            if not dry_run:
+                return answer.rowcount
+            counted = answer.fetchone()
+            return int(counted[0]) if counted else 0
+    import sqlite3
+
+    path = _sqlite_path()
+    if not path.is_file():
+        return 0
+    where, cutoff = (
+        ("", ()) if older_than is None else (" where fetched_at < ?", ((datetime.now(UTC) - older_than).isoformat(),))
+    )
+    statement = "select count(*)" if dry_run else "delete"
+    with sqlite3.connect(path) as base:
+        try:
+            answer = base.execute(f"{statement} from workflows_answers{where}", cutoff)
+            if not dry_run:
+                return answer.rowcount
+            counted = answer.fetchone()
+            return int(counted[0]) if counted else 0
+        except sqlite3.OperationalError:  # no table yet: nothing to drop
+            return 0

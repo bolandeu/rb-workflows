@@ -244,6 +244,10 @@ wf highlights --input sp.json --source arsenkin --cache --json
 Работает для `web-search`, `web-fetch`, `top`, `clustering`, `wordstat`, `highlights`, `semantics` — у каждого
 источника свой ключ, так что ответ `serp` не выдаётся за ответ Arsenkin.
 
+Растёт таблица от числа разных запросов (ключ — первичный), поэтому чистится по `fetched_at` — руками, расписания
+нет: `wf cache info` покажет, сколько строк и сколько места; `wf cache clear --older-than 30d --dry-run` посчитает,
+а с `--confirm` удалит (или `--all`). Журналы провайдеров — `serp cache clear` и `wordstat cache clear`.
+
 ## Ключи и прокси
 
 `credentials.binding(service)` выбирает бэкенд по месту запуска, а не по воркфлоу:

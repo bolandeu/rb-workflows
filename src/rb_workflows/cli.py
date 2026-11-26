@@ -275,6 +275,16 @@ def _parser() -> argparse.ArgumentParser:
     high.add_argument("--json", action="store_true", help="the report as JSON (the contract)")
     for name, add in WORKFLOW_ARGS.items():  # every workflow is a command of its own, next to the generic `run`
         add(sub.add_parser(name, help=WORKFLOW_HELP[name]))
+    cache_cmd = sub.add_parser("cache", help="the answer cache: what it holds, and dropping what is old")
+    cache_sub = cache_cmd.add_subparsers(dest="cache_command")
+    cache_info = cache_sub.add_parser("info", help="where the cache lives, how many answers it holds, how old")
+    cache_info.add_argument("--json", action="store_true", help="the report as JSON (the contract)")
+    cache_clear = cache_sub.add_parser("clear", help="drop stored answers: older than a term, or all of them")
+    cache_clear.add_argument("--older-than", help="drop answers fetched longer ago than this: 12h, 7d, 30d")
+    cache_clear.add_argument("--all", action="store_true", help="drop every stored answer")
+    cache_clear.add_argument("--dry-run", action="store_true", help="say how many would go, drop nothing")
+    cache_clear.add_argument("--confirm", action="store_true", help="required to drop for real: it is irreversible")
+    cache_clear.add_argument("--json", action="store_true", help="the report as JSON (the contract)")
     go = sub.add_parser("run", help="run one workflow: its input as one JSON object, the result as JSON")
     go.add_argument("workflow", choices=sorted(WORKFLOWS))
     go.add_argument("--input", help='JSON object with the workflow input, e.g. {"urls": ["https://example.com"]}')
@@ -294,6 +304,7 @@ Commands:
   web-fetch fetch pages through the waterfall of services
   web-search information on a topic from several search sources
   task       a submitted job: its state, or the report once it is done
+  cache     the answer cache: what it holds, and dropping what is old
   doctor    readiness of this machine: keys, proxies, the workflow engine
   auth      credentials of the services
   describe  this contract
@@ -521,6 +532,17 @@ DESCRIBE = {
                     },
                 ],
             },
+            {
+                "name": "cache",
+                "description": "the answer cache: what it holds, and dropping answers older than a term or all of them",
+                "options": [
+                    _param("--older-than", "str"),
+                    _param("--all", "boolean", False),
+                    _param("--dry-run", "boolean", False),
+                    _param("--confirm", "boolean", False),
+                    _JSON_OPTION,
+                ],
+            },
             {"name": "describe", "description": "this contract", "options": [_JSON_OPTION]},
         ],
     },
@@ -550,6 +572,8 @@ def main(argv: list[str] | None = None) -> int:
         return _highlights(args)
     if args.command == "task":
         return _tasks(args)
+    if args.command == "cache":
+        return _cache(args)
     if args.command == "doctor":
         return _doctor()
     if args.command == "auth":
@@ -1135,6 +1159,44 @@ def _semantics(args: argparse.Namespace) -> int:
         print(f"{document['url']} — {state}")
     print(f"phrases in the summary: {len(report['summary'])}; waited {report['requests_waited_s']} s", file=sys.stderr)
     return 0 if report["ok"] else 1
+
+
+def _cache(args: argparse.Namespace) -> int:
+    """`cache info` and `cache clear`: the one cache every workflow's answers live in, and its own cleanup."""
+    from . import cache as cache_store
+
+    if getattr(args, "cache_command", None) == "info":
+        found = cache_store.stats()
+        if args.json:
+            print(json.dumps({"ok": True, **found}, ensure_ascii=False))
+            return 0
+        print(f"{found['location']}: {found['entries']} answers, {found['size_bytes'] / 1048576:.1f} MB")
+        print(f"oldest {found['oldest'] or '-'}, newest {found['newest'] or '-'}")
+        return 0
+    if getattr(args, "cache_command", None) != "clear":
+        _invalid("nothing to do: pass `info` or `clear`")
+    if args.all == (args.older_than is not None):
+        _invalid("pass exactly one of --older-than <term> or --all")
+    try:
+        term = cache_store.age(args.older_than) if args.older_than else None
+    except ValueError as exc:
+        _invalid(str(exc))
+    if args.dry_run:
+        would = cache_store.clear(term, dry_run=True)
+        what = "every answer" if term is None else f"answers older than {args.older_than}"
+        if args.json:
+            print(json.dumps({"ok": True, "dry_run": True, "would_delete": would}, ensure_ascii=False))
+            return 0
+        print(f"would delete {would} of {what}")
+        return 0
+    if not args.confirm:
+        _invalid("dropping answers is irreversible: pass --confirm (or --dry-run to look first)")
+    deleted = cache_store.clear(term)
+    if args.json:
+        print(json.dumps({"ok": True, "deleted": deleted}, ensure_ascii=False))
+        return 0
+    print(f"deleted {deleted} answers")
+    return 0
 
 
 def _doctor() -> int:
